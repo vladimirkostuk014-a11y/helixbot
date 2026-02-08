@@ -34,10 +34,9 @@ let state = {
 
 let lastUpdateId = 0;
 const processedUpdates = new Set();
-// Для отслеживания уже отправленных уведомлений календаря (формат: ID_DATE_TIME)
 const sentCalendarNotifications = new Set();
 
-console.log("🔥 [SERVER] Запуск сервера Helix (v7.0 Stable)...");
+console.log("🔥 [SERVER] Запуск сервера Helix (v7.1 Fixes)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -108,25 +107,18 @@ const restrictUser = async (chatId, userId, permissions, untilDate = 0) => {
     });
 };
 
-const banUser = async (chatId, userId) => {
-    return await apiCall('banChatMember', { chat_id: chatId, user_id: userId });
-};
-
 // ==========================================
-// 4. CRON ЗАДАЧИ (Очистка + Календарь)
+// 4. CRON ЗАДАЧИ
 // ==========================================
 const runCronJobs = async () => {
     const now = new Date();
     const timeString = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-    const dateString = now.toLocaleDateString('ru-RU').split('.').reverse().join('-'); // YYYY-MM-DD
+    const dateString = now.toLocaleDateString('ru-RU').split('.').reverse().join('-'); 
     
-    // 1. Полночная очистка
     if (timeString === '00:00') {
-        console.log("🌙 [CRON] Полночь. Очистка...");
         try {
             await set(ref(db, 'topicHistory'), {});
             await set(ref(db, 'topicUnreads'), {});
-            
             const usersRef = ref(db, 'users');
             const snapshot = await get(usersRef);
             const users = snapshot.val();
@@ -136,55 +128,31 @@ const runCronJobs = async () => {
                 await firebaseUpdate(usersRef, updates);
             }
         } catch (e) { console.error("Cleanup error:", e); }
-        // Пауза, чтобы не сработало много раз за минуту
         await new Promise(r => setTimeout(r, 60000));
     }
 
-    // 2. Уведомления Календаря
     if (state.calendarEvents && state.config.targetChatId && state.config.enableCalendarAlerts) {
         for (const event of state.calendarEvents) {
-            // Проверяем дату и время
             if (event.notifyDate === dateString && event.notifyTime === timeString) {
                 const uniqueKey = `${event.id}_${dateString}_${timeString}`;
-                
                 if (!sentCalendarNotifications.has(uniqueKey)) {
-                    console.log(`📅 [CALENDAR] Отправка уведомления: ${event.title}`);
                     sentCalendarNotifications.add(uniqueKey);
-                    
-                    const msg = `⚡️ <b>${event.title}</b>\n\n` +
-                                `📅 <b>Даты:</b> ${event.startDate} — ${event.endDate}\n` +
-                                `📂 <i>Категория: ${event.category}</i>\n\n` +
-                                `${event.description || ''}`;
-                    
-                    const inlineKeyboard = event.buttons && event.buttons.length > 0 
-                        ? { inline_keyboard: event.buttons.map(b => [{ text: b.text, url: b.url }]) }
-                        : undefined;
-
+                    const msg = `⚡️ <b>${event.title}</b>\n\n📅 <b>Даты:</b> ${event.startDate} — ${event.endDate}\n📂 <i>Категория: ${event.category}</i>\n\n${event.description || ''}`;
+                    const inlineKeyboard = event.buttons && event.buttons.length > 0 ? { inline_keyboard: event.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
                     const threadId = event.topicId !== 'general' ? event.topicId : undefined;
 
                     if (event.mediaUrl && event.mediaUrl.startsWith('http')) {
-                         await sendPhoto(state.config.targetChatId, event.mediaUrl, msg, { 
-                             reply_markup: inlineKeyboard,
-                             message_thread_id: threadId
-                         });
+                         await sendPhoto(state.config.targetChatId, event.mediaUrl, msg, { reply_markup: inlineKeyboard, message_thread_id: threadId });
                     } else {
-                         await sendMessage(state.config.targetChatId, msg, { 
-                             reply_markup: inlineKeyboard,
-                             message_thread_id: threadId
-                         });
+                         await sendMessage(state.config.targetChatId, msg, { reply_markup: inlineKeyboard, message_thread_id: threadId });
                     }
                 }
             }
         }
     }
-    
-    // Очистка сета отправленных уведомлений раз в день (в 00:01)
-    if (timeString === '00:01') {
-        sentCalendarNotifications.clear();
-    }
+    if (timeString === '00:01') sentCalendarNotifications.clear();
 };
-
-setInterval(runCronJobs, 30000); // Проверка каждые 30 сек
+setInterval(runCronJobs, 30000);
 
 // ==========================================
 // 5. CRM & HISTORY
@@ -192,7 +160,6 @@ setInterval(runCronJobs, 30000); // Проверка каждые 30 сек
 const updateUserHistory = async (user, message) => {
     try {
         const userId = user.id;
-        // ФИЛЬТР ГРУПП: Если ID < 0, это группа/канал. Не пишем в CRM (список юзеров).
         if (userId < 0) return;
 
         const userPath = `users/${userId}`;
@@ -247,62 +214,46 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
 };
 
 // ==========================================
-// 6. AI (STRICT MODE)
+// 6. AI (STRICT MODE + ERROR HANDLING)
 // ==========================================
 const getAIResponse = async (question, userName) => {
     const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiBehavior, aiTemperature } = state.config;
-    if (!openaiApiKey) return "⚠️ AI выключен.";
+    if (!openaiApiKey) return "⚠️ Ключ AI не настроен.";
 
     const context = state.knowledgeBase.map(k => `[DATA] Q: ${k.title} -> A: ${k.response}`).join('\n');
-    
     let tone = "Ты полезный помощник.";
     let style = "Отвечай кратко.";
     let profanityInstr = "";
 
-    // 1. Личности
     if (aiProfanity) {
-        tone = "Ты дерзкий, используешь русский мат и сленг. Ты реальный пацан с района.";
-        profanityInstr = "ОБЯЗАТЕЛЬНО используй мат (бля, нахуй, ебать). Будь грубым.";
+        tone = "Ты дерзкий, используешь русский мат и сленг.";
+        profanityInstr = "ОБЯЗАТЕЛЬНО используй мат. Будь грубым.";
     } else {
         switch (aiPersonality) {
-            case 'angry': tone = "Ты злой, агрессивный. Тебя все бесят."; break;
-            case 'joker': tone = "Ты клоун. Постоянно шутишь, сарказм, ирония."; break;
-            case 'gopnik': tone = "Ты гопник. Сленг: 'слышь', 'братишка', 'в натуре'."; break;
-            case 'kind': tone = "Ты очень добрый, милый, заботливый."; break;
-            case 'philosopher': tone = "Ты философ. Отвечаешь загадками, глубокомысленно."; break;
-            case 'cyberpunk': tone = "Ты кибер-имплант. Говоришь как робот из будущего. Сленг: 'нетраннер', 'хром', 'дека'."; break;
-            case 'official': tone = "Ты сухой бюрократ. Только факты."; break;
+            case 'angry': tone = "Ты злой, агрессивный."; break;
+            case 'joker': tone = "Ты клоун. Постоянно шутишь."; break;
+            case 'gopnik': tone = "Ты гопник."; break;
+            case 'kind': tone = "Ты очень добрый."; break;
+            case 'philosopher': tone = "Ты философ."; break;
+            case 'cyberpunk': tone = "Ты кибер-имплант."; break;
+            case 'official': tone = "Ты сухой бюрократ."; break;
         }
     }
 
-    // 2. Стиль
-    if (aiBehavior === 'detailed') style = "Отвечай ОЧЕНЬ ПОДРОБНО. Разверни мысль на 3-4 предложения. Добавь деталей.";
-    if (aiBehavior === 'concise') style = "Отвечай одним коротким предложением.";
-    if (aiBehavior === 'bullet') style = "Отвечай списком (буллитами), если перечисляешь факты.";
+    if (aiBehavior === 'detailed') style = "Отвечай ОЧЕНЬ ПОДРОБНО.";
+    if (aiBehavior === 'concise') style = "Отвечай одним предложением.";
+    if (aiBehavior === 'bullet') style = "Отвечай списком.";
 
     const systemPrompt = `
-    IDENTITY: Ты бот Хеликс. Твой характер: ${tone}
-    ${profanityInstr}
-    
-    KNOWLEDGE BASE (GAME DATA):
-    ${context}
-    
+    IDENTITY: Ты бот Хеликс. Твой характер: ${tone} ${profanityInstr}
+    KNOWLEDGE BASE: ${context}
     PROTOCOL:
-    1. ANALYZE INPUT:
-       - Type A: "Small Talk" (Hello, how are you, joke, who are you). 
-         -> ACTION: Ignore Knowledge Base limitations. Chat using your Personality.
-       - Type B: "Data Query" (Runes, Armor, Stats, How to play, Drop rates, Locations). 
-         -> ACTION: STRICT KNOWLEDGE BASE LOOKUP.
-    
-    2. RULES FOR TYPE B (DATA QUERY):
-       - LOOK ONLY IN [KNOWLEDGE BASE] above.
-       - IF FOUND: Answer using the data, formatted in your Personality.
-       - IF NOT FOUND: You MUST say "I don't know" or "Not in database" (in your style). 
-       - CRITICAL: DO NOT INVENT DATA. DO NOT HALLUCINATE. DO NOT SEARCH INTERNET.
-       
-    3. FORMAT:
-       ${style}
-       - Language: Russian.
+    1. Type A (Small Talk): Chat using Personality.
+    2. Type B (Data Query): STRICT KNOWLEDGE BASE LOOKUP.
+       - IF FOUND: Answer using data.
+       - IF NOT FOUND: Say "I don't know" or "Not in database".
+       - CRITICAL: DO NOT INVENT DATA.
+    FORMAT: ${style} Language: Russian.
     `;
 
     try {
@@ -316,9 +267,19 @@ const getAIResponse = async (question, userName) => {
                 max_tokens: aiBehavior === 'detailed' ? 1200 : 600
             })
         });
+        
+        if (!response.ok) {
+            const errText = await response.text();
+            console.error("AI API Error:", errText);
+            return `Ошибка AI (${response.status}): Проверьте ключ или лимиты.`;
+        }
+        
         const data = await response.json();
-        return data.choices?.[0]?.message?.content || "Ошибка AI.";
-    } catch (e) { return "Ошибка сети."; }
+        return data.choices?.[0]?.message?.content || "Ошибка: Пустой ответ AI.";
+    } catch (e) { 
+        console.error("AI Network Error:", e);
+        return "Ошибка сети при запросе к AI."; 
+    }
 };
 
 // ==========================================
@@ -338,7 +299,12 @@ const handleSystemCommand = async (command, msg, targetThread) => {
             const userData = userSnap.val() || {};
             const newWarns = (userData.warnings || 0) + 1;
             
-            await firebaseUpdate(ref(db, userPath), { warnings: newWarns, name: targetUser.first_name, username: targetUser.username });
+            // FIX: Добавлена защита от undefined username
+            await firebaseUpdate(ref(db, userPath), { 
+                warnings: newWarns, 
+                name: targetUser.first_name, 
+                username: targetUser.username || '' 
+            });
             
             if (newWarns >= 3) {
                 await restrictUser(chatId, targetUser.id, { can_send_messages: false }, Math.floor(Date.now()/1000) + 172800);
@@ -358,11 +324,17 @@ const processUpdate = async (tgUpdate) => {
     const msg = tgUpdate.message;
     if (!msg) return; 
 
-    const chatId = msg.chat.id;
-    const threadId = msg.message_thread_id ? String(msg.message_thread_id) : 'general';
-    const isTargetChat = String(chatId) === state.config.targetChatId;
+    // --- 1. ФИЛЬТР ЧАТОВ (STRICT) ---
+    const chatId = String(msg.chat.id);
+    const targetChatId = String(state.config.targetChatId);
     const isPrivate = msg.chat.type === 'private';
 
+    // Если это не ЛС и не Целевой чат — бот полностью игнорирует сообщение
+    if (!isPrivate && chatId !== targetChatId) {
+        return; 
+    }
+
+    const threadId = msg.message_thread_id ? String(msg.message_thread_id) : 'general';
     const text = (msg.text || msg.caption || '').trim();
     const user = msg.from;
 
@@ -373,10 +345,8 @@ const processUpdate = async (tgUpdate) => {
         isGroup: !isPrivate, user: user.first_name, userId: user.id
     };
 
-    // Обновляем историю. ФИЛЬТР ГРУПП ВНУТРИ updateUserHistory
     await updateUserHistory(user, logMsg);
-    // Обновляем топики (здесь группы нужны для чата на сайте)
-    if (isTargetChat) await updateTopicHistory(threadId, { ...logMsg, isIncoming: true }, null);
+    if (!isPrivate) await updateTopicHistory(threadId, { ...logMsg, isIncoming: true }, null);
 
     if (user.is_bot) return;
     if (!state.isBotActive) return;
@@ -384,7 +354,6 @@ const processUpdate = async (tgUpdate) => {
     if (text) {
         const lowerText = text.toLowerCase();
         
-        // --- КОМАНДА /ЛЕЩ ---
         if (lowerText.startsWith('/лещ') || lowerText.startsWith('/slap')) {
             const target = msg.reply_to_message ? msg.reply_to_message.from.first_name : (text.split(' ').slice(1).join(' ') || 'воздух');
             const replyText = `👋 <b>${user.first_name}</b> дал смачного леща <b>${target}</b>!`;
@@ -392,7 +361,6 @@ const processUpdate = async (tgUpdate) => {
             return;
         }
 
-        // System Commands
         if (['/warn', '/mute', '/ban', '/unmute'].some(c => lowerText.startsWith(c))) {
             const cmd = lowerText.split(' ')[0];
             if (state.config.adminIds && state.config.adminIds.includes(String(user.id))) {
@@ -401,7 +369,6 @@ const processUpdate = async (tgUpdate) => {
             }
         }
         
-        // Custom Commands
         for (const cmd of state.commands) {
             if (cmd.matchType === 'exact' && lowerText === cmd.trigger.toLowerCase()) {
                 await sendMessage(chatId, cmd.response, { message_thread_id: threadId !== 'general' ? threadId : undefined });
@@ -423,12 +390,18 @@ const processUpdate = async (tgUpdate) => {
                     message_thread_id: threadId !== 'general' ? threadId : undefined
                 });
                 
-                // Stats & Log
+                // --- 2. FIX AI STATS CRASH ---
+                // Используем безопасное получение массива истории
+                const curHistRaw = state.aiStats?.history;
+                const curHist = Array.isArray(curHistRaw) ? curHistRaw : [];
                 const newStat = { query: question || "Привет", response: answer, time: Date.now() };
-                const curHist = state.aiStats.history || [];
-                await set(ref(db, 'aiStats'), { total: (state.aiStats.total || 0) + 1, history: [newStat, ...curHist].slice(0, 100) });
+
+                await set(ref(db, 'aiStats'), { 
+                    total: (state.aiStats?.total || 0) + 1, 
+                    history: [newStat, ...curHist].slice(0, 100) 
+                });
                 
-                if (isTargetChat) await updateTopicHistory(threadId, { user: 'Bot', text: answer, isIncoming: false, time: new Date().toLocaleTimeString('ru-RU'), type: 'text' }, null);
+                if (!isPrivate) await updateTopicHistory(threadId, { user: 'Bot', text: answer, isIncoming: false, time: new Date().toLocaleTimeString('ru-RU'), type: 'text' }, null);
             }
         }
     }
