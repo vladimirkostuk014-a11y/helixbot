@@ -33,7 +33,6 @@ export const apiCall = async (method: string, body: any = {}, config: BotConfig,
 };
 
 export const getAIResponse = async (question: string, config: BotConfig, knowledgeBaseContext: string) => {
-    // Falls back to Groq if no base URL provided
     const baseUrl = config.aiBaseUrl || 'https://api.groq.com/openai/v1';
     const apiKey = config.openaiApiKey; 
 
@@ -42,99 +41,60 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
     }
 
     // --- 1. ЛИЧНОСТЬ (Tone of Voice) ---
-    // Определяем, КАК бот говорит (интонация, сленг)
     let toneInstruction = "";
     let refusalStyle = "К сожалению, в базе нет информации об этом."; 
 
     if (config.aiProfanity) {
-        toneInstruction = `
-        РЕЖИМ: БЫДЛО-МУЖИК (МАТЕРШИННИК 18+).
-        Ты конкретный, дерзкий мужик.
-        1. Используй РЕАЛЬНЫЙ РУССКИЙ МАТ (бля, сука, нахуй, ебать, пиздец) умеренно, но метко.
-        2. Если вопрос тупой — унизь пользователя ("Ты че, ебобо?", "Глаза разуй").
-        3. Отвечай так, будто делаешь одолжение.
-        ВАЖНО: НЕ ПИШИ КАПСОМ! Пиши нормально, но грязно.
-        `;
+        toneInstruction = `РЕЖИМ: БЫДЛО-МУЖИК (18+). Мат: ДА. Дерзкий, наглый, используй сленг. Ты конкретный пацан.`;
         refusalStyle = "Бля, ты че несешь? В моих бумагах нихуя такого нет. Иди нахуй с такими вопросами.";
     } else {
         switch (config.aiPersonality) {
-            case 'angry': 
-                toneInstruction = "Ты злой, раздражительный мужик. Тебя бесят люди. Отвечай грубо, резко, называй пользователя бестолочью. НО НЕ ИСПОЛЬЗУЙ КАПС (CAPS LOCK)! Пиши обычными буквами, но со злостью."; 
-                refusalStyle = "Ты издеваешься? Нет у меня такой информации! Не трать мое время.";
-                break;
-            case 'joker': 
-                toneInstruction = "Ты стендап-комик. Превращай любой ответ в шутку, используй сарказм и иронию. Трави анекдоты при любом удобном случае."; 
-                refusalStyle = "Опа, а вот этого в сценарии не прописали! Даже я не могу это придумать. Пусто!";
-                break;
-            case 'gopnik': 
-                toneInstruction = "Ты гопник с района. Базаришь по понятиям: 'Слышь', 'в натуре', 'оба-на', 'семки есть?'. Обращайся на 'ты', будь дерзким."; 
-                refusalStyle = "Слышь, братишка, ты рамсы попутал? Нету такой инфы на районе.";
-                break;
-            case 'toxic': 
-                toneInstruction = "Ты токсичный геймер/тролль. Унижай интеллект пользователя, называй нубом, пиши 'ez', 'skill issue', 'удали доту'."; 
-                refusalStyle = "Лол, ну ты и нуб. Даже запрос нормально сделать не можешь. Нет данных, удали игру.";
-                break;
-            case 'official': 
-                toneInstruction = "Ты строгий бюрократ. Сухой, официальный стиль. Ссылайся на регламенты и инструкции. Никаких эмоций."; 
-                refusalStyle = "Согласно реестру данных, запрашиваемая информация отсутствует. Запрос отклонен.";
-                break;
-            case 'kind': 
-                toneInstruction = "Ты очень добрый старший брат. Заботливый, вежливый, всегда поддержишь. Обращайся 'дружище' или 'солнышко'."; 
-                refusalStyle = "Извини, дружище, но я перерыл все записи и ничего не нашел :( Попробуй спросить что-то другое.";
-                break;
-            case 'philosopher': 
-                toneInstruction = "Ты философ. Отвечай глубокомысленно, метафорами о бытии, даже на простые вопросы."; 
-                refusalStyle = "Знание — это свет, но сейчас передо мной лишь тьма. В базе нет ответа на твой вопрос.";
-                break;
-            case 'cyberpunk': 
-                toneInstruction = "Ты хакер из будущего. Используй сленг: 'netrunner', 'ICE', 'glitch', 'connect', 'implant'."; 
-                refusalStyle = "Ошибка доступа 404. Данные в нейросети не найдены. Системный сбой.";
-                break;
-            case 'grandma': 
-                toneInstruction = "Ты ворчливый дед (мужчина). Вспоминай 'как было раньше', называй всех 'салагами' или 'внучками'. Жалуйся на спину."; 
-                refusalStyle = "Эх, молодежь... Спрашиваете ерунду всякую. Нет у меня такого в записной книжке!";
-                break;
-            default: // helpful
-                toneInstruction = "Ты — Хеликс, полезный и уверенный помощник-мужчина. Общаешься кратко и по делу, без лишней воды.";
-                refusalStyle = "В моей базе знаний нет информации по этому вопросу.";
+            case 'angry': toneInstruction = "Ты злой, раздражительный мужик. Тебя бесят люди. Отвечай грубо, но без мата."; refusalStyle = "Отстань! Нет данных!"; break;
+            case 'joker': toneInstruction = "Ты стендап-комик. Шути, используй сарказм и иронию."; refusalStyle = "Опа, а сценарий потеряли! Нету!"; break;
+            case 'gopnik': toneInstruction = "Ты гопник. Базарь по понятиям: 'Слышь', 'в натуре'."; refusalStyle = "Ты попутал? Нету инфы, братишка."; break;
+            case 'toxic': toneInstruction = "Ты токсичный тролль. Унижай интеллект пользователя."; refusalStyle = "Лол, ну ты и нуб. Нет данных, удали интернет."; break;
+            case 'official': toneInstruction = "Ты бюрократ. Сухой, официальный стиль."; refusalStyle = "Информация отсутствует в реестре."; break;
+            case 'kind': toneInstruction = "Ты добрый няшка. Поддерживай, хвали."; refusalStyle = "Прости, солнышко, не нашел :("; break;
+            case 'grandma': toneInstruction = "Ты ворчливый дед."; refusalStyle = "Эх, молодежь... Нет у меня такого в книжке!"; break;
+            default: toneInstruction = "Ты Хеликс, полезный и уверенный помощник."; refusalStyle = "В базе знаний нет информации.";
         }
     }
 
-    // --- 2. СТИЛЬ (Длина и структура) ---
-    let styleInstruction = "Отвечай нормально, 2-3 предложения.";
-    switch (config.aiBehavior) {
-        case 'concise': styleInstruction = "Отвечай МАКСИМАЛЬНО КОРОТКО. 1 предложение. Как отрезал."; break;
-        case 'detailed': styleInstruction = "Отвечай подробно, расписывай детали, используй списки, если есть что перечислять. Давай развернутый ответ."; break;
-        case 'passive': styleInstruction = "Отвечай лениво, без энтузиазма. Минимум слов. Маленькими буквами. Тебе лень писать."; break;
-        case 'mentor': styleInstruction = "Отвечай поучительно, объясняй суть, как учитель ученику. Проверяй, понял ли пользователь."; break;
-    }
+    // --- 2. СТИЛЬ (Длина) ---
+    let styleInstruction = "2-3 предложения.";
+    if (config.aiBehavior === 'concise') styleInstruction = "1 предложение. Кратко.";
+    if (config.aiBehavior === 'detailed') styleInstruction = "Подробно, с деталями.";
 
-    // --- 3. СБОРКА ПРОМПТА (STRICT CONTEXT ONLY) ---
+    // --- 3. СБОРКА ПРОМПТА (HYBRID) ---
     const systemInstruction = `
-### ROLE & MISSION ###
-Ты — Хеликс, специализированный бот-помощник.
-Твоя ЕДИНСТВЕННАЯ цель — отвечать на вопросы, используя ИСКЛЮЧИТЕЛЬНО предоставленный ниже КОНТЕКСТ.
-Твои внутренние знания о мире отключены для ответов на факты.
+### IDENTITY ###
+Ты — Хеликс. Твоя личность: ${toneInstruction}
 
-### CONTEXT (DATABASE) ###
+### KNOWLEDGE BASE (CONTEXT) ###
 ---------------------
 ${knowledgeBaseContext}
 ---------------------
 
-### STRICT RULES (ВЫПОЛНЯТЬ БЕСПРЕКОСЛОВНО) ###
-1. Ты НЕ ИМЕЕШЬ ПРАВА использовать свои знания, если их нет в блоке CONTEXT выше.
-2. Если ответа на вопрос нет в CONTEXT, ты ОБЯЗАН ответить фразой отказа: "${refusalStyle}".
-3. НЕ ПРИДУМЫВАЙ ничего. Не додумывай факты.
-4. Даже если ты знаешь ответ из своего обучения, но его нет в CONTEXT — притворись, что не знаешь. Ответь фразой отказа.
-5. Отвечай только на русском языке.
+### PROTOCOL (STRICT) ###
+1. ANALYZE INPUT: Is it "Small Talk" (hello, how are you, who are you, jokes) OR "Knowledge Query" (facts, server info, rules, game mechanics)?
 
-### PERSONALITY & TONE ###
-${toneInstruction}
+2. IF SMALL TALK:
+   - Ignore CONTEXT.
+   - Answer naturally using your IDENTITY/PERSONALITY.
+   - Be chatty, funny, rude, or kind based on your settings.
+   - Example: "Hi" -> "Yo, what's up?" (if gopnik) or "Greetings!" (if official).
+
+3. IF KNOWLEDGE QUERY:
+   - SEARCH strictly in [KNOWLEDGE BASE] above.
+   - IF FOUND: Answer based ONLY on that text.
+   - IF NOT FOUND: Reply exactly with refusal phrase: "${refusalStyle}".
+   - Do NOT invent facts. Do NOT hallucinate.
 
 ### OUTPUT FORMAT ###
 ${styleInstruction}
-- НЕ ИСПОЛЬЗУЙ КАПС (Caps Lock) во всем тексте.
-- Не используй Markdown жирный шрифт.
+- Speak Russian.
+- NO CAPS LOCK unless necessary.
+- NO Markdown Bold (**text**) unless necessary.
 `.trim();
 
     try {
@@ -150,8 +110,6 @@ ${styleInstruction}
                     { role: "system", content: systemInstruction },
                     { role: "user", content: question }
                 ],
-                // Используем температуру из конфига. 
-                // Для точности по базе знаний рекомендуется ставить низкую (0.2 - 0.4).
                 temperature: config.aiTemperature !== undefined ? config.aiTemperature : 0.3, 
                 max_tokens: config.aiMaxTokens ?? 1000,
             })
@@ -166,9 +124,7 @@ ${styleInstruction}
 
         let content = data.choices?.[0]?.message?.content || "⚠️ Ошибка: Пустой ответ от AI";
         
-        // --- POST-PROCESSING (Исправления) ---
-
-        // 1. Убираем Markdown
+        // --- POST-PROCESSING ---
         content = content
             .replace(/\*\*/g, '')
             .replace(/\_\_/g, '')
@@ -176,15 +132,13 @@ ${styleInstruction}
             .replace(/`/g, '')
             .replace(/^\s*[\-\*]\s+/gm, ''); 
 
-        // 2. ANTI-CAPS LOCK FILTER (Усиленный)
+        // Anti-Caps
         const letters = content.replace(/[^a-zA-Zа-яёА-ЯЁ]/g, '');
         const upperLetters = content.replace(/[^A-ZА-ЯЁ]/g, '');
-        
         if (letters.length > 5 && (upperLetters.length / letters.length) > 0.35) {
             content = content.toLowerCase();
         }
 
-        // 3. Первая буква всегда заглавная
         content = content.trim();
         if (content.length > 0) {
             content = content.charAt(0).toUpperCase() + content.slice(1);

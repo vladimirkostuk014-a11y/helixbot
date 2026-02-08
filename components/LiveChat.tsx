@@ -19,6 +19,8 @@ interface LiveChatProps {
     quickReplies?: QuickReply[];
     setQuickReplies?: (replies: QuickReply[]) => void;
     onAddTopic?: (id: string, name: string) => void;
+    onDeleteTopic?: (id: string) => void;
+    onMarkTopicRead?: (id: string) => void;
 }
 
 const LiveChat: React.FC<LiveChatProps> = ({ 
@@ -35,7 +37,9 @@ const LiveChat: React.FC<LiveChatProps> = ({
     unreadCounts = {},
     quickReplies = [],
     setQuickReplies,
-    onAddTopic
+    onAddTopic,
+    onDeleteTopic,
+    onMarkTopicRead
 }) => {
     const [text, setText] = useState('');
     const [mediaFile, setMediaFile] = useState<File | null>(null);
@@ -93,6 +97,16 @@ const LiveChat: React.FC<LiveChatProps> = ({
     
     const handleTopicClick = (tid: string) => {
         setActiveTopic(tid);
+        if (onMarkTopicRead) {
+            onMarkTopicRead(tid);
+        }
+    };
+
+    const handleDeleteTopicClick = (tid: string, e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (window.confirm('Удалить тему из списка? История сообщений будет скрыта.')) {
+            if (onDeleteTopic) onDeleteTopic(tid);
+        }
     };
 
     const handleAddTopicSubmit = () => {
@@ -107,7 +121,6 @@ const LiveChat: React.FC<LiveChatProps> = ({
                 id = lastPart;
             }
         } else if (id.includes('/')) {
-             // Handle simple copy paste like t.me/c/123/123
              const parts = id.split('/');
              const lastPart = parts[parts.length - 1];
              if (!isNaN(Number(lastPart))) id = lastPart;
@@ -121,7 +134,6 @@ const LiveChat: React.FC<LiveChatProps> = ({
         }
     };
 
-    // Сортировка топиков: General сверху, затем по последнему сообщению
     const sortedTopics = Object.keys(topicNames).sort((a, b) => {
         if (a === 'general') return -1;
         if (b === 'general') return 1;
@@ -129,6 +141,10 @@ const LiveChat: React.FC<LiveChatProps> = ({
         const histB = topicHistory[b] || [];
         const timeA = histA.length > 0 ? (histA[histA.length-1].timestamp || 0) : 0;
         const timeB = histB.length > 0 ? (histB[histB.length-1].timestamp || 0) : 0;
+        // Prioritize unread
+        const unreadA = unreadCounts[a] || 0;
+        const unreadB = unreadCounts[b] || 0;
+        if (unreadA !== unreadB) return unreadB - unreadA;
         return timeB - timeA;
     });
 
@@ -186,8 +202,8 @@ const LiveChat: React.FC<LiveChatProps> = ({
                             </div>
                             <div className="flex items-center gap-2">
                                 {/* Unread Badge */}
-                                {unreadCounts[tid] > 0 && activeTopic !== tid && (
-                                    <div className="bg-green-500 text-white text-[10px] font-bold px-1.5 rounded-full min-w-[16px] text-center animate-pulse">
+                                {(unreadCounts[tid] || 0) > 0 && activeTopic !== tid && (
+                                    <div className="bg-green-500 text-white text-[10px] font-bold px-1.5 rounded-full min-w-[16px] text-center animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.6)]">
                                         {unreadCounts[tid]}
                                     </div>
                                 )}
@@ -205,9 +221,17 @@ const LiveChat: React.FC<LiveChatProps> = ({
 
                                 {(topicHistory[tid] || []).length > 0 && <span className="text-[10px] bg-gray-700 px-1.5 py-0.5 rounded-full text-gray-300">{(topicHistory[tid] || []).length}</span>}
                                 
+                                {/* Edit */}
                                 <button onClick={(e) => startEditing(tid, topicNames[tid], e)} className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-white p-1">
                                     <Icons.Edit2 size={12}/>
                                 </button>
+
+                                {/* Delete */}
+                                {onDeleteTopic && (
+                                    <button onClick={(e) => handleDeleteTopicClick(tid, e)} className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-500 p-1">
+                                        <Icons.Trash2 size={12}/>
+                                    </button>
+                                )}
                             </div>
                         </div>
                     ))}

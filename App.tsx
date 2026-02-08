@@ -11,7 +11,7 @@ import CalendarEvents from './components/CalendarEvents';
 import { BotConfig, Command, KnowledgeItem, AiStats, AiStat, Group, QuickReply, LogEntry, CalendarEvent, User as UserType } from './types';
 import { apiCall } from './services/api';
 import UserCRM from './components/UserCRM';
-import { subscribeToData, saveData } from './services/firebase'; 
+import { subscribeToData, saveData, removeData } from './services/firebase'; 
 
 const HARDCODED_CONFIG = {
     token: '7614990025:AAEGbRiUO3zPR1VFhwTPgQ4eHVX-eo5snPI',
@@ -60,6 +60,7 @@ const App = () => {
     const [groups, setGroups] = useState<Record<string, Group>>({}); 
     const [topicNames, setTopicNames] = useState<Record<string, string>>({ 'general': 'Общий чат (General)' }); 
     const [topicHistory, setTopicHistory] = useState<Record<string, any[]>>({ 'general': [] }); 
+    const [topicUnreads, setTopicUnreads] = useState<Record<string, number>>({});
     const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
     const [auditLogs, setAuditLogs] = useState<LogEntry[]>([]);
     const [disabledAiTopics, setDisabledAiTopics] = useState<string[]>([]); 
@@ -101,7 +102,6 @@ const App = () => {
         sub('quickReplies', (val) => { setQuickReplies(toArray(val)); markLoaded('quickReplies'); });
         sub('auditLogs', (val) => { setAuditLogs(toArray(val)); markLoaded('auditLogs'); });
         
-        // Fix for AiStats Type and Structure
         sub('aiStats', (val) => { 
             if (val) { 
                 const newStats = {
@@ -117,6 +117,7 @@ const App = () => {
         
         sub('categories', (val) => { if(val) setCategories(toArray(val)); markLoaded('categories'); });
         sub('topicNames', (val) => { if(val) setTopicNames(val); markLoaded('topicNames'); });
+        sub('topicUnreads', (val) => { if(val) setTopicUnreads(val); else setTopicUnreads({}); markLoaded('topicUnreads'); });
         sub('disabledAiTopics', (val) => { if(val) setDisabledAiTopics(toArray(val)); else setDisabledAiTopics([]); markLoaded('disabledAiTopics'); });
         sub('topicHistory', (val) => { if(val) { const cleanHistory: Record<string, any[]> = {}; Object.entries(val).forEach(([k, v]) => { cleanHistory[k] = toArray(v); }); setTopicHistory(cleanHistory); } else setTopicHistory({}); markLoaded('topicHistory'); });
         sub('calendarEvents', (val) => { setCalendarEvents(toArray(val)); markLoaded('calendarEvents'); });
@@ -152,25 +153,17 @@ const App = () => {
     };
 
     const clearAiHistory = () => {
-        // 1. Prepare empty data
         const emptyStats = { total: 0, history: [] };
-        
-        // 2. Clear Firebase
         saveData('aiStats', emptyStats); 
         saveData('topicHistory', {});
-        
-        // 3. Clear Local State IMMEDIATELY
         setAiStats(emptyStats);
         setTopicHistory({});
-
-        // 4. Clear Users History (Local + Firebase)
         const clearedUsers = { ...users };
         Object.keys(clearedUsers).forEach(key => {
             clearedUsers[key] = { ...clearedUsers[key], history: [], msgCount: 0, dailyMsgCount: 0 };
         });
         setUsers(clearedUsers);
         saveData('users', clearedUsers);
-        
         addLog('Система', 'История очищена через панель', 'warning');
     };
 
@@ -240,9 +233,7 @@ const App = () => {
             };
             
             const updatedTopicHistory = [...(topicHistory[topicId] || []), newMsg];
-            // Update local state immediately
             setTopicHistory(prev => ({ ...prev, [topicId]: updatedTopicHistory }));
-            // Save to Firebase
             saveData(`topicHistory/${topicId}`, updatedTopicHistory);
 
         } catch (e) {
@@ -335,7 +326,35 @@ const App = () => {
                 <div className="flex-1 overflow-auto p-8 scroll-smooth custom-scrollbar">
                     <div className="max-w-[95%] mx-auto h-full">
                         {activeTab === 'dashboard' && <Dashboard users={users} groups={groups} setGroups={setGroups} aiStats={aiStats} config={config} setConfig={setConfig} isAiThinking={false} setAiStats={setAiStats} addLog={addLog} setActiveTab={setActiveTab} onStopBot={() => setIsBotActive(false)} onClearAiStats={clearAiHistory} viewMode="overview" auditLogs={auditLogs} onDeleteGroup={handleDeleteGroup} />}
-                        {activeTab === 'livechat' && <LiveChat topicNames={topicNames} topicHistory={topicHistory} activeTopic={activeTopic} setActiveTopic={setActiveTopic} disabledAiTopics={disabledAiTopics} onToggleAi={(tid) => { const list = disabledAiTopics.includes(tid) ? disabledAiTopics.filter(t => t !== tid) : [...disabledAiTopics, tid]; setDisabledAiTopics(list); saveData('disabledAiTopics', list); }} onClearTopic={(tid) => { const h = {...topicHistory, [tid]: []}; setTopicHistory(h); saveData('topicHistory', h); }} onRenameTopic={(id, name) => { const n = {...topicNames, [id]: name}; setTopicNames(n); saveData('topicNames', n); }} unreadCounts={{}} quickReplies={quickReplies} setQuickReplies={(qr) => { setQuickReplies(qr); saveData('quickReplies', qr); }} onSendMessage={handleLiveChatSend} onAddTopic={(id, name) => { const n = {...topicNames, [id]: name}; setTopicNames(n); saveData('topicNames', n); addLog('LiveChat', `Добавлена тема ${name} (ID: ${id}) вручную`, 'success'); }} />}
+                        
+                        {activeTab === 'livechat' && <LiveChat 
+                            topicNames={topicNames} 
+                            topicHistory={topicHistory} 
+                            activeTopic={activeTopic} 
+                            setActiveTopic={setActiveTopic} 
+                            disabledAiTopics={disabledAiTopics} 
+                            unreadCounts={topicUnreads}
+                            onToggleAi={(tid) => { const list = disabledAiTopics.includes(tid) ? disabledAiTopics.filter(t => t !== tid) : [...disabledAiTopics, tid]; setDisabledAiTopics(list); saveData('disabledAiTopics', list); }} 
+                            onClearTopic={(tid) => { const h = {...topicHistory, [tid]: []}; setTopicHistory(h); saveData('topicHistory', h); }} 
+                            onRenameTopic={(id, name) => { const n = {...topicNames, [id]: name}; setTopicNames(n); saveData('topicNames', n); }} 
+                            quickReplies={quickReplies} 
+                            setQuickReplies={(qr) => { setQuickReplies(qr); saveData('quickReplies', qr); }} 
+                            onSendMessage={handleLiveChatSend} 
+                            onAddTopic={(id, name) => { const n = {...topicNames, [id]: name}; setTopicNames(n); saveData('topicNames', n); addLog('LiveChat', `Добавлена тема ${name} (ID: ${id}) вручную`, 'success'); }} 
+                            onDeleteTopic={(id) => { 
+                                const n = {...topicNames}; delete n[id]; setTopicNames(n); saveData('topicNames', n); 
+                                removeData(`topicHistory/${id}`);
+                                removeData(`topicUnreads/${id}`);
+                                setTopicUnreads(prev => { const p = {...prev}; delete p[id]; return p; });
+                                addLog('LiveChat', `Тема ${id} удалена`, 'danger');
+                                if (activeTopic === id) setActiveTopic('general');
+                            }}
+                            onMarkTopicRead={(id) => {
+                                setTopicUnreads(prev => ({...prev, [id]: 0}));
+                                saveData(`topicUnreads/${id}`, 0);
+                            }}
+                        />}
+                        
                         {activeTab === 'users' && <UserCRM users={users} setUsers={setUsers} config={config} commands={commands} topicNames={topicNames} addLog={addLog} />}
                         {activeTab === 'broadcasts' && <Broadcasts users={users} config={config} addLog={addLog} onBroadcastSent={(uid, txt, type, url) => { /* Update user history manually here if needed */ }} />}
                         {activeTab === 'calendar' && <CalendarEvents events={calendarEvents} setEvents={handleCalendarUpdate} categories={calendarCategories} setCategories={(c) => { setCalendarCategories(c); saveData('calendarCategories', c); }} topicNames={topicNames} addLog={addLog} config={config} />}

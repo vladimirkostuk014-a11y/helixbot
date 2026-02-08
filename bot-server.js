@@ -36,7 +36,7 @@ let state = {
 let lastUpdateId = 0;
 const processedUpdates = new Set();
 
-console.log("🔥 [SERVER] Запуск сервера Helix (v4.6 Fix Patch)...");
+console.log("🔥 [SERVER] Запуск сервера Helix (v4.7 Hybrid AI & Sync Fix)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -135,13 +135,20 @@ const updateUserHistory = async (user, message) => {
             history: Array.isArray(existingUser.history) ? existingUser.history : [],
             msgCount: (existingUser.msgCount || 0) + 1,
             dailyMsgCount: (existingUser.dailyMsgCount || 0) + 1,
-            unreadCount: (existingUser.unreadCount || 0) + 1,
+            // unreadCount обновляется отдельно при входящем
             lastSeen: new Date().toLocaleTimeString('ru-RU'),
             lastActiveDate: new Date().toLocaleDateString()
         };
 
         const newHistory = [...currentUser.history, message].slice(-50); 
         currentUser.history = newHistory;
+
+        // Если сообщение от пользователя, увеличиваем unreadCount
+        if (message.dir === 'in') {
+             currentUser.unreadCount = (existingUser.unreadCount || 0) + 1;
+        } else {
+             currentUser.unreadCount = 0; // Если ответил админ
+        }
 
         await set(ref(db, userPath), currentUser);
     } catch (e) {
@@ -154,15 +161,12 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
         const tId = topicId || 'general';
         const path = `topicHistory/${tId}`;
         
-        // Авто-регистрация новой темы
-        // Если ID не general и такого топика еще нет в локальном стейте ИЛИ пришло явное имя
+        // Авто-регистрация
         const currentName = state.topicNames[tId];
         const newName = topicNameRaw || (currentName ? currentName : `Topic ${tId}`);
         
         if (tId !== 'general') {
             if (!currentName || (topicNameRaw && currentName !== topicNameRaw)) {
-                console.log(`[TOPIC] Registering/Updating topic: ${tId} -> ${newName}`);
-                // Fix: Using firebase update function correctly
                 await update(ref(db, 'topicNames'), { [tId]: newName });
                 state.topicNames[tId] = newName; 
             }
@@ -173,13 +177,21 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
         const updatedHistory = [...(Array.isArray(currentHistory) ? currentHistory : []), message].slice(-50);
         
         await set(ref(db, path), updatedHistory);
+
+        // Увеличиваем счетчик непрочитанных для топика в Firebase
+        if (message.dir === 'in') {
+            const unreadRef = ref(db, `topicUnreads/${tId}`);
+            const unreadSnap = await get(unreadRef);
+            await set(unreadRef, (unreadSnap.val() || 0) + 1);
+        }
+
     } catch (e) {
         console.error("[TOPIC ERROR] Save failed:", e);
     }
 };
 
 // ==========================================
-// 5. МОЗГ AI
+// 5. МОЗГ AI (HYBRID MODE)
 // ==========================================
 const getAIResponse = async (question, userName) => {
     const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiBehavior, aiTemperature, aiMaxTokens } = state.config;
@@ -187,35 +199,51 @@ const getAIResponse = async (question, userName) => {
 
     const context = state.knowledgeBase.map(k => `[${k.category}] ${k.title}: ${k.response}`).join('\n');
     
-    // --- 1. ЛИЧНОСТЬ ---
-    let toneInstruction = "";
-    let refusalStyle = "К сожалению, в базе нет информации об этом."; 
-
+    // --- ЛИЧНОСТЬ ---
+    let toneInstruction = "Ты полезный помощник.";
+    let refusalStyle = "В моих данных этого нет.";
+    
     if (aiProfanity) {
-        toneInstruction = `РЕЖИМ: БЫДЛО-МУЖИК (18+). Мат: ДА. Грубость: ДА.`;
-        refusalStyle = "Бля, нет такой инфы. Иди нахуй.";
+        toneInstruction = `РЕЖИМ: БЫДЛО (18+). Матерись, будь дерзким, используй сленг. Ты конкретный пацан.`;
+        refusalStyle = "Бля, нет такой инфы. Иди нахуй с такими вопросами.";
     } else {
         switch (aiPersonality) {
-            case 'angry': toneInstruction = "Ты злой. Отвечай грубо."; refusalStyle = "Нет данных! Отвали."; break;
-            case 'joker': toneInstruction = "Ты комик. Шути."; refusalStyle = "Этого в сценарии нет!"; break;
-            case 'gopnik': toneInstruction = "Ты гопник. Сленг."; refusalStyle = "Нету инфы, братишка."; break;
-            case 'kind': toneInstruction = "Ты добрый брат."; refusalStyle = "Прости, не нашел :("; break;
-            default: toneInstruction = "Ты полезный помощник."; refusalStyle = "В базе нет информации.";
+            case 'angry': toneInstruction = "Ты злой и раздражительный. Люди тебя бесят."; refusalStyle = "Отстань! Нет данных."; break;
+            case 'joker': toneInstruction = "Ты шутник. Сарказм, ирония, приколы."; refusalStyle = "Ой, а сценарий потеряли! Нету!"; break;
+            case 'gopnik': toneInstruction = "Ты гопник. Базарь по понятиям, сленг, семки."; refusalStyle = "Ты попутал? Нету инфы, братишка."; break;
+            case 'kind': toneInstruction = "Ты добрый няшка. Поддерживай, хвали."; refusalStyle = "Прости, солнышко, не нашел :("; break;
+            case 'official': toneInstruction = "Ты бюрократ. Сухой язык фактов."; refusalStyle = "Информация отсутствует в реестре."; break;
+            default: toneInstruction = "Ты Хеликс, уверенный помощник.";
         }
     }
 
-    // --- 2. СТИЛЬ ---
-    let styleInstruction = "2-3 предложения.";
-    if (aiBehavior === 'concise') styleInstruction = "1 предложение.";
-
+    // --- СИСТЕМНЫЙ ПРОМПТ (ГИБРИДНЫЙ) ---
     const systemPrompt = `
-    ROLE: ${toneInstruction}
+    IDENTITY: Ты - Хеликс. Твоя личность: ${toneInstruction}
     USER: ${userName}
-    CONTEXT: ${context}
-    INSTRUCTIONS:
-    1. ИСПОЛЬЗУЙ ТОЛЬКО CONTEXT.
-    2. Если нет в CONTEXT -> "${refusalStyle}".
-    3. FORMAT: ${styleInstruction}
+    
+    KNOWLEDGE BASE (CONTEXT):
+    ----------------
+    ${context}
+    ----------------
+    
+    PROTOCOL (STRICT):
+    1. ANALYZE INPUT: Is it "Small Talk" (greeting, how are you, who are you) OR "Knowledge Query" (facts, server info, mechanics)?
+    
+    2. IF SMALL TALK:
+       - Ignore CONTEXT.
+       - Answer naturally using your IDENTITY/PERSONALITY.
+       - Be chatty, funny, or rude depending on personality settings.
+    
+    3. IF KNOWLEDGE QUERY:
+       - SEARCH strictly in [KNOWLEDGE BASE] above.
+       - IF FOUND: Answer based ONLY on that text.
+       - IF NOT FOUND: Reply exactly with: "${refusalStyle}". Do NOT invent facts.
+       
+    4. GENERAL RULES:
+       - Keep it short (${aiBehavior === 'concise' ? '1 sentence' : '2-3 sentences'}).
+       - Never mention you are an AI.
+       - Speak Russian.
     `;
 
     try {
@@ -235,7 +263,7 @@ const getAIResponse = async (question, userName) => {
 };
 
 // ==========================================
-// 6. ОБРАБОТКА СИСТЕМНЫХ КОМАНД
+// 6. ОБРАБОТКА СИСТЕМНЫХ КОМАНД (SYNC FIX)
 // ==========================================
 const handleSystemCommand = async (command, msg, targetThread) => {
     const chatId = msg.chat.id;
@@ -249,20 +277,25 @@ const handleSystemCommand = async (command, msg, targetThread) => {
 
         // WARN
         if (command === '/warn') {
-            const userSnapshot = await get(ref(db, `users/${targetUser.id}`));
+            // FIX: Читаем и обновляем напрямую по пути пользователя, чтобы UI видел изменения
+            const userPath = `users/${targetUser.id}`;
+            const userSnapshot = await get(ref(db, userPath));
             const userData = userSnapshot.val() || {};
-            const warns = (userData.warnings || 0) + 1;
             
-            await update(ref(db, `users/${targetUser.id}`), { warnings: warns });
+            const currentWarns = userData.warnings || 0;
+            const newWarns = currentWarns + 1;
             
-            if (warns >= 3) {
+            // Сначала обновляем базу (UI сразу увидит это)
+            await update(ref(db, userPath), { warnings: newWarns });
+            
+            if (newWarns >= 3) {
                 const res = await restrictUser(chatId, targetUser.id, { can_send_messages: false }, Math.floor(Date.now()/1000) + 172800);
                 if (res.ok) {
-                    await update(ref(db, `users/${targetUser.id}`), { warnings: 0, status: 'muted' });
+                    await update(ref(db, userPath), { warnings: 0, status: 'muted' });
                     return sendMessage(chatId, `🛑 <b>${targetName}</b> получил 3/3 варнов и заглушен на 48 часов.`, { message_thread_id: targetThread });
                 }
             } else {
-                return sendMessage(chatId, `⚠️ <b>${targetName}</b>, предупреждение (${warns}/3).`, { message_thread_id: targetThread });
+                return sendMessage(chatId, `⚠️ <b>${targetName}</b>, предупреждение (${newWarns}/3).`, { message_thread_id: targetThread });
             }
         }
 
@@ -302,7 +335,6 @@ const handleSystemCommand = async (command, msg, targetThread) => {
 // ==========================================
 // 7. ОБРАБОТКА СООБЩЕНИЙ (MAIN)
 // ==========================================
-// !!! FIX: Changed argument name to tgUpdate to avoid shadowing imported 'update' function
 const processUpdate = async (tgUpdate) => {
     const msg = tgUpdate.message;
     if (!msg) return; 
@@ -314,23 +346,19 @@ const processUpdate = async (tgUpdate) => {
     const isTargetChat = String(chatId) === state.config.targetChatId;
     const threadId = msg.message_thread_id ? String(msg.message_thread_id) : 'general';
     
-    // --- AUTO-TOPIC DISCOVERY ---
     const topicNameGuess = msg.reply_to_message?.forum_topic_created?.name || 
                           (msg.forum_topic_created ? msg.forum_topic_created.name : null);
 
-    // Force register topic on ANY message if it's not general
     if (isTargetChat && threadId !== 'general') {
         const knownName = state.topicNames[threadId];
         const nameToSave = topicNameGuess || knownName || `Topic ${threadId}`;
         
         if (!knownName || (topicNameGuess && knownName !== topicNameGuess)) {
-             // Now this calls the Firebase update function correctly
              await update(ref(db, 'topicNames'), { [threadId]: nameToSave });
              state.topicNames[threadId] = nameToSave;
         }
     }
 
-    // Определяем тип и медиа для логов
     let msgType = 'text';
     let mediaUrl = '';
     
@@ -343,7 +371,6 @@ const processUpdate = async (tgUpdate) => {
     
     const displayText = text || (mediaUrl ? `[${mediaUrl}]` : `[${msgType}]`);
 
-    // 1. ПРОВЕРКА ОТКЛЮЧЕННЫХ ГРУПП
     const groupKey = String(chatId);
     if (!isPrivate && state.groups[groupKey]?.isDisabled) return;
     
@@ -376,7 +403,7 @@ const processUpdate = async (tgUpdate) => {
 
     if (user.is_bot) return;
 
-    // 2. ФИЛЬТР МАТА
+    // BAD WORDS
     if (state.config.bannedWords && !isPrivate && text) {
         const badWords = state.config.bannedWords.split(',').map(w => w.trim().toLowerCase()).filter(w => w);
         if (badWords.some(w => text.toLowerCase().includes(w))) {
@@ -384,8 +411,11 @@ const processUpdate = async (tgUpdate) => {
             const warnMsg = await sendMessage(chatId, `⚠️ @${user.username || user.first_name}, это слово запрещено!`, { message_thread_id: threadId !== 'general' ? threadId : undefined });
             setTimeout(() => { if (warnMsg?.result) deleteMessage(chatId, warnMsg.result.message_id); }, 5000);
             
-            const userRef = (await get(ref(db, `users/${user.id}`))).val() || {};
-            await update(ref(db, `users/${user.id}`), { warnings: (userRef.warnings || 0) + 1 });
+            // Sync Warns
+            const userRefPath = `users/${user.id}`;
+            const uSnap = await get(ref(db, userRefPath));
+            const uData = uSnap.val() || {};
+            await update(ref(db, userRefPath), { warnings: (uData.warnings || 0) + 1 });
             return; 
         }
     }
@@ -393,12 +423,10 @@ const processUpdate = async (tgUpdate) => {
     if (!state.isBotActive) return;
     if (isPrivate && !state.config.enablePM) return;
 
-    // 3. КОМАНДЫ (Только если есть текст)
     if (text) {
         const lowerText = text.toLowerCase();
         const firstWord = lowerText.split(' ')[0];
         
-        // --- SLAP COMMAND (/лещ) ---
         const slapCommand = state.commands.find(c => 
             c.trigger.toLowerCase() === firstWord && 
             (c.trigger === '/лещ' || c.trigger === '/slap')
@@ -452,7 +480,6 @@ const processUpdate = async (tgUpdate) => {
             }
         }
 
-        // 4. AI
         if (!commandHandled && state.config.enableAI) {
             const isMention = lowerText.includes('хеликс') || lowerText.includes('helix') || (isPrivate && state.config.enablePM);
             const isDisabled = state.disabledAiTopics.includes(threadId);
@@ -488,9 +515,6 @@ const processUpdate = async (tgUpdate) => {
     }
 };
 
-// ==========================================
-// 8. ЗАПУСК
-// ==========================================
 const startLoop = async () => {
     setInterval(() => { set(ref(db, 'status/heartbeat'), Date.now()); }, 60000);
 

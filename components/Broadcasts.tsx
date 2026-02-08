@@ -52,7 +52,8 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
     // Displayed users (filtered by search)
     const displayedUsers = validUsers.filter(u => 
         u.name.toLowerCase().includes(filterSearch.toLowerCase()) || 
-        String(u.id).includes(filterSearch)
+        String(u.id).includes(filterSearch) ||
+        (u.username && u.username.toLowerCase().includes(filterSearch.toLowerCase()))
     );
 
     // Target users for broadcast (not excluded)
@@ -222,7 +223,7 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
                                         </div>
                                         <div>
                                             <div className="text-sm text-white font-medium">{u.name}</div>
-                                            <div className="text-xs text-gray-500">ID: {u.id} • {u.role === 'admin' ? 'Админ' : 'Юзер'}</div>
+                                            <div className="text-xs text-gray-500">@{u.username || '---'} • ID: {u.id}</div>
                                         </div>
                                     </div>
                                     {u.role === 'admin' && <Icons.Shield size={12} className="text-yellow-500"/>}
