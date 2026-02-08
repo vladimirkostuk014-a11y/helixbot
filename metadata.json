@@ -1,0 +1,5 @@
+{
+  "name": "BOT Admin Panel",
+  "description": "A comprehensive admin dashboard for managing Telegram bots, including live chat, user CRM, knowledge base management, and AI integration.",
+  "requestFramePermissions": []
+}
