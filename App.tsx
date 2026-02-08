@@ -165,6 +165,66 @@ const App = () => {
         addLog('Группы', `Группа ${groupId} удалена`, 'danger');
     };
 
+    const handleLiveChatSend = async (data: { text: string; mediaUrl?: string; mediaFile?: File | null; buttons?: any[]; topicId: string }) => {
+        const { text, mediaUrl, mediaFile, buttons, topicId } = data;
+        
+        try {
+            const markup = buttons && buttons.length > 0 ? JSON.stringify({ 
+                inline_keyboard: buttons.map(b => [{ text: b.text, url: b.url }]) 
+            }) : undefined;
+            
+            const threadId = topicId !== 'general' ? topicId : undefined;
+
+            if (mediaFile) {
+                const fd = new FormData();
+                fd.append('chat_id', config.targetChatId);
+                const method = mediaFile.type.startsWith('video') ? 'sendVideo' : 'sendPhoto';
+                fd.append(method === 'sendVideo' ? 'video' : 'photo', mediaFile);
+                if (text) fd.append('caption', text);
+                if (markup) fd.append('reply_markup', markup);
+                if (threadId) fd.append('message_thread_id', threadId);
+                await apiCall(method, fd, config, true);
+            } else if (mediaUrl) {
+                await apiCall('sendPhoto', { 
+                    chat_id: config.targetChatId, 
+                    photo: mediaUrl, 
+                    caption: text, 
+                    reply_markup: markup ? JSON.parse(markup) : undefined,
+                    message_thread_id: threadId
+                }, config);
+            } else {
+                await apiCall('sendMessage', { 
+                    chat_id: config.targetChatId, 
+                    text: text, 
+                    reply_markup: markup ? JSON.parse(markup) : undefined,
+                    message_thread_id: threadId
+                }, config);
+            }
+
+            // Manually update local history for immediate feedback
+            const newMsg = {
+                dir: 'out',
+                text: text,
+                type: 'text',
+                time: new Date().toLocaleTimeString('ru-RU'),
+                timestamp: Date.now(),
+                isIncoming: false,
+                isGroup: true,
+                user: 'Admin'
+            };
+            
+            const updatedTopicHistory = [...(topicHistory[topicId] || []), newMsg];
+            // Update local state immediately
+            setTopicHistory(prev => ({ ...prev, [topicId]: updatedTopicHistory }));
+            // Save to Firebase
+            saveData(`topicHistory/${topicId}`, updatedTopicHistory);
+
+        } catch (e) {
+            console.error(e);
+            alert('Ошибка отправки сообщения');
+        }
+    };
+
     // Calculate Uptime (90s threshold)
     const isOnline = (Date.now() - lastHeartbeat) < 90000; 
 
@@ -190,7 +250,7 @@ const App = () => {
                         </div>
                         <div>
                             <h1 className="text-xl font-bold text-white tracking-tight">Бот Helix</h1>
-                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v2.3</span>
+                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v2.4</span>
                         </div>
                     </div>
                     
@@ -249,7 +309,7 @@ const App = () => {
                 <div className="flex-1 overflow-auto p-8 scroll-smooth custom-scrollbar">
                     <div className="max-w-[95%] mx-auto h-full">
                         {activeTab === 'dashboard' && <Dashboard users={users} groups={groups} setGroups={setGroups} aiStats={aiStats} config={config} setConfig={setConfig} isAiThinking={false} setAiStats={setAiStats} addLog={addLog} setActiveTab={setActiveTab} onStopBot={() => setIsBotActive(false)} onClearAiStats={clearAiHistory} viewMode="overview" auditLogs={auditLogs} onDeleteGroup={handleDeleteGroup} />}
-                        {activeTab === 'livechat' && <LiveChat topicNames={topicNames} topicHistory={topicHistory} activeTopic={activeTopic} setActiveTopic={setActiveTopic} disabledAiTopics={disabledAiTopics} onToggleAi={(tid) => { const list = disabledAiTopics.includes(tid) ? disabledAiTopics.filter(t => t !== tid) : [...disabledAiTopics, tid]; setDisabledAiTopics(list); saveData('disabledAiTopics', list); }} onClearTopic={(tid) => { const h = {...topicHistory, [tid]: []}; setTopicHistory(h); saveData('topicHistory', h); }} onRenameTopic={(id, name) => { const n = {...topicNames, [id]: name}; setTopicNames(n); saveData('topicNames', n); }} unreadCounts={{}} quickReplies={quickReplies} setQuickReplies={(qr) => { setQuickReplies(qr); saveData('quickReplies', qr); }} onSendMessage={(data) => { /* UI preview only */ }} />}
+                        {activeTab === 'livechat' && <LiveChat topicNames={topicNames} topicHistory={topicHistory} activeTopic={activeTopic} setActiveTopic={setActiveTopic} disabledAiTopics={disabledAiTopics} onToggleAi={(tid) => { const list = disabledAiTopics.includes(tid) ? disabledAiTopics.filter(t => t !== tid) : [...disabledAiTopics, tid]; setDisabledAiTopics(list); saveData('disabledAiTopics', list); }} onClearTopic={(tid) => { const h = {...topicHistory, [tid]: []}; setTopicHistory(h); saveData('topicHistory', h); }} onRenameTopic={(id, name) => { const n = {...topicNames, [id]: name}; setTopicNames(n); saveData('topicNames', n); }} unreadCounts={{}} quickReplies={quickReplies} setQuickReplies={(qr) => { setQuickReplies(qr); saveData('quickReplies', qr); }} onSendMessage={handleLiveChatSend} />}
                         {activeTab === 'users' && <UserCRM users={users} setUsers={setUsers} config={config} commands={commands} topicNames={topicNames} addLog={addLog} />}
                         {activeTab === 'broadcasts' && <Broadcasts users={users} config={config} addLog={addLog} onBroadcastSent={(uid, txt, type, url) => { /* Update user history manually here if needed */ }} />}
                         {activeTab === 'calendar' && <CalendarEvents events={calendarEvents} setEvents={handleCalendarUpdate} categories={calendarCategories} setCategories={(c) => { setCalendarCategories(c); saveData('calendarCategories', c); }} topicNames={topicNames} addLog={addLog} config={config} />}

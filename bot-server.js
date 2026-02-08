@@ -1,6 +1,6 @@
 
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, onValue, set, update, get } from "firebase/database";
+import { getDatabase, ref, onValue, set, update, get, remove } from "firebase/database";
 import fetch from 'node-fetch';
 
 // ==========================================
@@ -36,7 +36,7 @@ let state = {
 let lastUpdateId = 0;
 const processedUpdates = new Set();
 
-console.log("🔥 [SERVER] Запуск сервера Helix (v2.3 Final Fix)...");
+console.log("🔥 [SERVER] Запуск сервера Helix (v2.5 Final Fixes)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -49,7 +49,6 @@ const sync = (path, key, isArray = false) => {
         } else {
             state[key] = val || (key === 'config' ? {} : {});
         }
-        if (key === 'config') console.log(`[CONFIG] Токен загружен: ...${state.config.token?.slice(-5)}`);
     });
 };
 
@@ -64,8 +63,7 @@ sync('aiStats', 'aiStats');
 sync('disabledAiTopics', 'disabledAiTopics', true);
 
 onValue(ref(db, 'status/active'), (snap) => {
-    const val = snap.val();
-    state.isBotActive = val !== false; 
+    state.isBotActive = snap.val() !== false; 
     console.log(`[STATUS] Режим ответа: ${state.isBotActive ? '✅ АКТИВЕН' : '⏸ НА ПАУЗЕ'}`);
 });
 
@@ -81,9 +79,13 @@ const apiCall = async (method, body) => {
             body: JSON.stringify(body)
         });
         const data = await response.json();
+        if (!data.ok) {
+            console.error(`[TELEGRAM ERROR] ${method}:`, data.description);
+        }
         return data;
     } catch (e) {
         console.error(`[NETWORK ERROR] ${method}:`, e.message);
+        return { ok: false, description: e.message };
     }
 };
 
@@ -96,6 +98,28 @@ const sendMessage = async (chatId, text, options = {}) => {
     });
 };
 
+const deleteMessage = async (chatId, messageId) => {
+    return await apiCall('deleteMessage', { chat_id: chatId, message_id: messageId });
+};
+
+const restrictUser = async (chatId, userId, permissions, untilDate = 0) => {
+    return await apiCall('restrictChatMember', {
+        chat_id: chatId,
+        user_id: userId,
+        permissions: JSON.stringify(permissions),
+        until_date: untilDate,
+        use_independent_chat_permissions: true // Важно для супергрупп
+    });
+};
+
+const banUser = async (chatId, userId) => {
+    return await apiCall('banChatMember', { chat_id: chatId, user_id: userId });
+};
+
+const unbanUser = async (chatId, userId) => {
+    return await apiCall('unbanChatMember', { chat_id: chatId, user_id: userId, only_if_banned: true });
+};
+
 // ==========================================
 // 4. ЛОГИКА СОХРАНЕНИЯ (CRM & CHAT)
 // ==========================================
@@ -105,7 +129,6 @@ const updateUserHistory = async (user, message) => {
         const userId = user.id;
         const userPath = `users/${userId}`;
         
-        // ВАЖНО: username: user.username || '' - защищает от краша
         let currentUser = state.users[userId] || {
             id: userId,
             name: user.first_name || 'Unknown',
@@ -120,7 +143,6 @@ const updateUserHistory = async (user, message) => {
             unreadCount: 0
         };
 
-        // Обновляем данные
         currentUser.name = user.first_name || currentUser.name;
         currentUser.username = user.username || ''; 
         currentUser.lastSeen = new Date().toLocaleTimeString('ru-RU');
@@ -129,14 +151,12 @@ const updateUserHistory = async (user, message) => {
         currentUser.dailyMsgCount = (currentUser.dailyMsgCount || 0) + 1;
         currentUser.unreadCount = (currentUser.unreadCount || 0) + 1;
 
-        // История
         const history = Array.isArray(currentUser.history) ? currentUser.history : [];
         const newHistory = [...history, message].slice(-50); 
         currentUser.history = newHistory;
 
-        // Пишем в базу
         await set(ref(db, userPath), currentUser);
-        state.users[userId] = currentUser; 
+        // Не обновляем локальный стейт вручную, ждем синхронизации от Firebase, чтобы избежать рассинхрона
         
     } catch (e) {
         console.error("[CRM ERROR] Save failed:", e);
@@ -152,7 +172,9 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
         if (!state.topicNames[tId] && tId !== 'general') {
             const newName = topicNameRaw || `Topic ${tId}`;
             await update(ref(db, 'topicNames'), { [tId]: newName });
-            console.log(`[TOPIC] Зарегистрирован новый топик: ${newName} (${tId})`);
+            console.log(`[TOPIC] Registered new topic: ${newName} (${tId})`);
+        } else if (tId !== 'general' && topicNameRaw && state.topicNames[tId] !== topicNameRaw) {
+            await update(ref(db, 'topicNames'), { [tId]: topicNameRaw });
         }
 
         const snapshot = await get(ref(db, path));
@@ -166,15 +188,13 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
 };
 
 // ==========================================
-// 5. МОЗГ AI (УМНЫЙ РЕЖИМ)
+// 5. МОЗГ AI
 // ==========================================
 const getAIResponse = async (question, userName) => {
     const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity } = state.config;
-    
     if (!openaiApiKey) return "⚠️ AI не настроен.";
 
     const context = state.knowledgeBase.map(k => `[${k.category}] ${k.title}: ${k.response}`).join('\n');
-
     let persona = "Ты — Хеликс, полезный помощник.";
     if (aiProfanity) persona = "Ты дерзкий, используешь мат (18+), но по делу.";
     else if (aiPersonality === 'joker') persona = "Ты шутник.";
@@ -183,13 +203,11 @@ const getAIResponse = async (question, userName) => {
     const systemPrompt = `
     ROLE: ${persona}
     USER: ${userName}
-    
     INSTRUCTIONS:
-    1. SMALL TALK: Если юзер пишет "Привет", "Как дела", "Кто ты" - отвечай свободно. БАЗУ НЕ ИСПОЛЬЗУЙ.
-    2. FACTS: Если вопрос про игру, клан, правила - ИСПОЛЬЗУЙ ТОЛЬКО CONTEXT НИЖЕ.
-       CONTEXT:
-       ${context}
-    3. UNKNOWN: Если это вопрос про факты, но в CONTEXT пусто - ответь: "В моей базе знаний нет информации об этом."
+    1. SMALL TALK: Отвечай свободно на приветствия.
+    2. FACTS: ИСПОЛЬЗУЙ ТОЛЬКО CONTEXT НИЖЕ.
+       CONTEXT: ${context}
+    3. UNKNOWN: Если нет в контексте, скажи что не знаешь.
     `;
 
     try {
@@ -198,24 +216,91 @@ const getAIResponse = async (question, userName) => {
             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${openaiApiKey}` },
             body: JSON.stringify({
                 model: aiModel || "llama-3.3-70b-versatile",
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: question }
-                ],
-                temperature: 0.6,
-                max_tokens: 800
+                messages: [{ role: "system", content: systemPrompt }, { role: "user", content: question }],
+                temperature: 0.6, max_tokens: 800
             })
         });
         const data = await response.json();
         return data.choices?.[0]?.message?.content || "Ошибка генерации.";
-    } catch (e) {
-        console.error("AI Error:", e);
-        return "Ошибка AI.";
+    } catch (e) { return "Ошибка AI."; }
+};
+
+// ==========================================
+// 6. ОБРАБОТКА СИСТЕМНЫХ КОМАНД
+// ==========================================
+const handleSystemCommand = async (command, msg, targetThread) => {
+    const chatId = msg.chat.id;
+    const reply = msg.reply_to_message;
+    
+    // Если это реплай
+    if (reply && reply.from) {
+        const targetUser = reply.from;
+        const targetName = targetUser.first_name;
+        
+        if (targetUser.is_bot) return sendMessage(chatId, "⚠️ Нельзя применить к боту.", { message_thread_id: targetThread });
+
+        // WARN
+        if (command === '/warn') {
+            const userRef = (await get(ref(db, `users/${targetUser.id}`))).val() || {};
+            const warns = (userRef.warnings || 0) + 1;
+            
+            await update(ref(db, `users/${targetUser.id}`), { warnings: warns });
+            
+            if (warns >= 3) {
+                const res = await restrictUser(chatId, targetUser.id, { can_send_messages: false }, Math.floor(Date.now()/1000) + 172800); // 48h
+                if (res.ok) {
+                    await update(ref(db, `users/${targetUser.id}`), { warnings: 0, status: 'muted' });
+                    return sendMessage(chatId, `🛑 <b>${targetName}</b> получил 3/3 варнов и заглушен на 48 часов.`, { message_thread_id: targetThread });
+                } else {
+                    return sendMessage(chatId, `⚠️ Ошибка выдачи мута: ${res.description}`, { message_thread_id: targetThread });
+                }
+            } else {
+                return sendMessage(chatId, `⚠️ <b>${targetName}</b>, предупреждение (${warns}/3).`, { message_thread_id: targetThread });
+            }
+        }
+
+        // MUTE
+        if (command === '/mute') {
+            const res = await restrictUser(chatId, targetUser.id, { can_send_messages: false }, Math.floor(Date.now()/1000) + 3600);
+            if (res.ok) {
+                await update(ref(db, `users/${targetUser.id}`), { status: 'muted' });
+                return sendMessage(chatId, `😶 <b>${targetName}</b> заглушен на 1 час.`, { message_thread_id: targetThread });
+            } else {
+                return sendMessage(chatId, `⚠️ Не удалось заглушить: ${res.description}`, { message_thread_id: targetThread });
+            }
+        }
+
+        // BAN
+        if (command === '/ban') {
+            const res = await banUser(chatId, targetUser.id);
+            if (res.ok) {
+                await update(ref(db, `users/${targetUser.id}`), { status: 'banned' });
+                return sendMessage(chatId, `⛔️ <b>${targetName}</b> забанен.`, { message_thread_id: targetThread });
+            } else {
+                return sendMessage(chatId, `⚠️ Не удалось забанить: ${res.description}`, { message_thread_id: targetThread });
+            }
+        }
+        
+        // UNMUTE
+        if (command === '/unmute') {
+            const res = await restrictUser(chatId, targetUser.id, { 
+                can_send_messages: true, 
+                can_send_media_messages: true, 
+                can_send_other_messages: true,
+                can_add_web_page_previews: true
+            });
+            if (res.ok) {
+                await update(ref(db, `users/${targetUser.id}`), { status: 'active' });
+                return sendMessage(chatId, `✅ <b>${targetName}</b> размучен.`, { message_thread_id: targetThread });
+            } else {
+                return sendMessage(chatId, `⚠️ Ошибка: ${res.description}`, { message_thread_id: targetThread });
+            }
+        }
     }
 };
 
 // ==========================================
-// 6. ОБРАБОТКА СООБЩЕНИЙ
+// 7. ОБРАБОТКА СООБЩЕНИЙ (MAIN)
 // ==========================================
 const processUpdate = async (update) => {
     const msg = update.message;
@@ -229,29 +314,85 @@ const processUpdate = async (update) => {
     const threadId = msg.message_thread_id ? String(msg.message_thread_id) : 'general';
     const topicNameGuess = msg.reply_to_message?.forum_topic_created?.name || null;
 
+    // 1. ПРОВЕРКА ОТКЛЮЧЕННЫХ ГРУПП (FIXED)
+    // Если группа есть в списке и у неё isDisabled = true, игнорируем всё, кроме команд админа (если нужно, но лучше полный игнор)
+    // Для надежности приводим к строке
+    const groupKey = String(chatId);
+    if (!isPrivate && state.groups[groupKey]?.isDisabled) {
+        // Проверяем, не админ ли пишет команду разблокировки? (пока нет такой, просто игнорим)
+        return; 
+    }
+    
+    // Если новой группы нет в базе - добавляем
+    if (!isPrivate && !state.groups[groupKey]) {
+        await set(ref(db, `groups/${groupKey}`), {
+            id: chatId,
+            title: msg.chat.title || `Group ${chatId}`,
+            type: msg.chat.type,
+            lastActive: new Date().toLocaleTimeString(),
+            isDisabled: false
+        });
+    }
+
     const logMsg = {
         dir: 'in',
         text: text,
         type: 'text',
         time: new Date().toLocaleTimeString('ru-RU'),
+        timestamp: Date.now(), // !!! FIX ДЛЯ ГРАФИКОВ
         isGroup: !isPrivate,
         user: user.first_name 
     };
 
+    // Сохраняем всегда для истории
     await updateUserHistory(user, logMsg);
     if (isTargetChat) {
         await updateTopicHistory(threadId, { ...logMsg, isIncoming: true }, topicNameGuess);
     }
 
     if (user.is_bot) return;
+
+    // 2. ФИЛЬТР МАТА (BAD WORDS) (FIXED)
+    if (state.config.bannedWords && !isPrivate) {
+        const badWords = state.config.bannedWords.split(',').map(w => w.trim().toLowerCase()).filter(w => w);
+        if (badWords.some(w => text.toLowerCase().includes(w))) {
+            await deleteMessage(chatId, msg.message_id);
+            const warnMsg = await sendMessage(chatId, `⚠️ @${user.username || user.first_name}, это слово запрещено!`, { message_thread_id: threadId !== 'general' ? threadId : undefined });
+            
+            // Удаляем предупреждение через 5 сек чтобы не мусорить
+            setTimeout(() => {
+                if (warnMsg && warnMsg.result) deleteMessage(chatId, warnMsg.result.message_id);
+            }, 5000);
+
+            // Выдаем варн в БД
+            const userRef = (await get(ref(db, `users/${user.id}`))).val() || {};
+            await update(ref(db, `users/${user.id}`), { warnings: (userRef.warnings || 0) + 1 });
+            return; 
+        }
+    }
+
+    // Если бот на паузе - дальше не идем
     if (!state.isBotActive) return;
     if (isPrivate && !state.config.enablePM) return;
 
-
-    // 2. ПРОВЕРКА КОМАНД
+    // 3. КОМАНДЫ
     const lowerText = text.toLowerCase();
-    let commandHandled = false;
+    
+    // Системные команды (Hardcoded logic for execution)
+    if (lowerText.startsWith('/warn') || lowerText.startsWith('/mute') || lowerText.startsWith('/ban') || lowerText.startsWith('/unmute')) {
+        const cmd = lowerText.split(' ')[0];
+        // Проверяем права админа (строгое сравнение строк)
+        if (state.config.adminIds && state.config.adminIds.includes(String(user.id))) {
+            await handleSystemCommand(cmd, msg, threadId !== 'general' ? threadId : undefined);
+            return;
+        } else {
+            // Можно ответить, что нет прав, или промолчать
+            // console.log(`User ${user.id} tried system command but is not admin`);
+        }
+    }
 
+    let commandHandled = false;
+    // Сортируем: сначала exact match, потом contains
     const sortedCommands = [...state.commands].sort((a, b) => {
         if (a.matchType === 'exact') return -1;
         return 1;
@@ -270,6 +411,7 @@ const processUpdate = async (update) => {
             if (cmd.allowedTopicId && cmd.allowedTopicId !== 'private_only' && cmd.allowedTopicId !== threadId && !isPrivate) continue;
 
             const targetThread = (cmd.isSystem && cmd.notificationTopicId) ? cmd.notificationTopicId : threadId;
+            
             const replyMarkup = cmd.buttons && cmd.buttons.length > 0 ? {
                 inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }])
             } : undefined;
@@ -278,22 +420,13 @@ const processUpdate = async (update) => {
                 message_thread_id: targetThread !== 'general' ? targetThread : undefined,
                 reply_markup: replyMarkup
             });
-
-            if (isTargetChat) {
-                await updateTopicHistory(targetThread, {
-                    user: 'Bot',
-                    text: cmd.response,
-                    isIncoming: false,
-                    time: new Date().toLocaleTimeString('ru-RU'),
-                    type: 'text'
-                }, null);
-            }
+            
             commandHandled = true;
             break; 
         }
     }
 
-    // 3. AI
+    // 4. AI
     if (!commandHandled && state.config.enableAI) {
         const isMention = lowerText.includes('хеликс') || lowerText.includes('helix') || (isPrivate && state.config.enablePM);
         const isDisabled = state.disabledAiTopics.includes(threadId);
@@ -318,49 +451,11 @@ const processUpdate = async (update) => {
                     text: answer,
                     isIncoming: false,
                     time: new Date().toLocaleTimeString('ru-RU'),
+                    timestamp: Date.now(),
                     type: 'text'
                 }, null);
             }
         }
-    }
-};
-
-// ==========================================
-// 7. КАЛЕНДАРЬ
-// ==========================================
-const checkCalendar = async () => {
-    if (!state.config.enableCalendarAlerts || !state.isBotActive) return;
-
-    const now = new Date();
-    const dateStr = now.toISOString().split('T')[0];
-    const timeStr = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-
-    let updatesNeeded = false;
-    const updatedEvents = state.calendarEvents.map(event => {
-        const notifyDate = event.notifyDate || event.startDate;
-        const notifyTime = event.notifyTime || '09:00';
-
-        if (notifyDate === dateStr && notifyTime === timeStr && !event.sent) {
-            const msg = `⚡️ <b>${event.title}</b>\n\n📅 <b>Даты:</b> ${event.startDate} — ${event.endDate}\n📂 ${event.category}\n\n${event.description || ''}`;
-            const replyMarkup = event.buttons?.length > 0 ? {
-                inline_keyboard: event.buttons.map(b => [{ text: b.text, url: b.url }])
-            } : undefined;
-
-            const targetThread = event.topicId && event.topicId !== 'general' ? event.topicId : null;
-
-            sendMessage(state.config.targetChatId, msg, {
-                message_thread_id: targetThread,
-                reply_markup: replyMarkup
-            });
-
-            updatesNeeded = true;
-            return { ...event, sent: true }; 
-        }
-        return event;
-    });
-
-    if (updatesNeeded) {
-        await set(ref(db, 'calendarEvents'), updatedEvents);
     }
 };
 
@@ -370,7 +465,6 @@ const checkCalendar = async () => {
 const startLoop = async () => {
     setInterval(() => {
         set(ref(db, 'status/heartbeat'), Date.now());
-        checkCalendar();
     }, 60000);
 
     while (true) {

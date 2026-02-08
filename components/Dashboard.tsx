@@ -59,24 +59,31 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         const lastDayOfMonth = new Date(year, month + 1, 0).getDate();
         const dataMap = new Map<string, { date: string, messages: number, ai: number }>();
 
+        // Pre-fill days
         for (let i = 1; i <= lastDayOfMonth; i++) {
             const d = new Date(year, month, i);
             const dateStr = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
             dataMap.set(dateStr, { date: dateStr, messages: 0, ai: 0 });
         }
 
-        const isCurrentMonth = (ts: number) => {
-            const d = new Date(ts);
-            return d.getFullYear() === year && d.getMonth() === month;
-        };
-
         userArray.forEach(user => {
             if (user.history) {
                 user.history.forEach(msg => {
-                    if (msg.timestamp && isCurrentMonth(msg.timestamp) && msg.isGroup) {
-                        const d = new Date(msg.timestamp);
-                        const dateStr = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-                        if (dataMap.has(dateStr)) dataMap.get(dateStr)!.messages += 1;
+                    // Try to use timestamp, fallback to parsing string if needed
+                    let msgDate: Date;
+                    if (msg.timestamp) {
+                        msgDate = new Date(msg.timestamp);
+                    } else {
+                        // Old fallback (often inaccurate for past days, but kept for legacy)
+                        msgDate = new Date(); 
+                    }
+
+                    if (msgDate.getFullYear() === year && msgDate.getMonth() === month && msg.isGroup) {
+                        const dateStr = msgDate.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+                        if (dataMap.has(dateStr)) {
+                            const entry = dataMap.get(dateStr)!;
+                            entry.messages += 1;
+                        }
                     }
                 });
             }
@@ -84,8 +91,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
 
         if (aiStats.history) {
             aiStats.history.forEach(stat => {
-                 if (isCurrentMonth(stat.time)) {
-                    const d = new Date(stat.time);
+                 const d = new Date(stat.time);
+                 if (d.getFullYear() === year && d.getMonth() === month) {
                     const dateStr = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
                     if (dataMap.has(dateStr)) dataMap.get(dateStr)!.ai += 1;
                  }
@@ -102,20 +109,13 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         });
         return Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([q, c]) => ({ query: q, count: c }));
     };
-
+    
     const handleSave = (section: 'ai' | 'ban') => {
-        // Just force update state to trigger firebase save in App.tsx
         setConfig({...config}); 
-        
         if (section === 'ai') setAiSaveStatus('Сохранено!');
         else setBanSaveStatus('Сохранено!');
-        
         if (addLog) addLog('Настройки', `Обновлены настройки ${section === 'ai' ? 'AI' : 'Бан-лист'}`, 'info');
-        
-        setTimeout(() => {
-            if (section === 'ai') setAiSaveStatus('');
-            else setBanSaveStatus('');
-        }, 2000);
+        setTimeout(() => { if (section === 'ai') setAiSaveStatus(''); else setBanSaveStatus(''); }, 2000);
     };
 
     const toggleGroup = (groupId: string) => {
@@ -148,7 +148,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
 
     const sendAiReport = async () => {
         const topList = getTopQuestions().slice(0, 10).map((item, i) => `${i+1}. ${item.query} — ${item.count} раз`).join('\n');
-        
         if (topList) {
             const admins = config.adminIds.split(',').map(id => id.trim()).filter(id => id);
             for (const adminId of admins) {
@@ -166,7 +165,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         setPlaygroundInput('');
         setPlaygroundHistory(prev => [...prev, { role: 'user', text: msg }]);
         setIsPlaygroundThinking(true);
-
         try {
             const response = await getAIResponse(msg, config, "База знаний: (В режиме песочницы используется ограниченная база)");
             setPlaygroundHistory(prev => [...prev, { role: 'bot', text: response }]);
@@ -177,13 +175,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         }
     };
 
-    const handleClearPlayground = () => {
-        setPlaygroundHistory([]);
-    };
-
-    const handleClearChart = () => {
-        if (onClearAiStats) onClearAiStats();
-    };
+    const handleClearPlayground = () => { setPlaygroundHistory([]); };
+    const handleClearChart = () => { if (onClearAiStats) onClearAiStats(); };
 
     const KpiCard = ({ icon: Icon, title, value, color, gradient, onClick, actionIcon: ActionIcon }: any) => (
         <div onClick={onClick} className={`relative overflow-hidden p-6 rounded-2xl border border-gray-800 shadow-xl bg-gradient-to-br ${gradient} group cursor-pointer transition-transform hover:scale-[1.02]`}>
@@ -210,7 +203,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
             <div className="space-y-6">
                 <div className="bg-[#121214] p-6 rounded-2xl border border-gray-800 shadow-xl relative overflow-hidden flex flex-col h-full">
                     <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-purple-500 to-indigo-500"></div>
-                    
                     <div className="flex justify-between items-start mb-5 relative z-10">
                             <h3 className="font-bold text-lg text-white flex items-center gap-2"><Icons.Sparkles className="text-purple-400"/> AI Настройки (Helix)</h3>
                             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border backdrop-blur-sm ${config.enableAI ? 'bg-green-500/10 border-green-500/30 text-green-400' : 'bg-red-500/10 border-red-500/30 text-red-400'}`}>
@@ -218,15 +210,10 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                 <span className="text-xs font-bold tracking-wider">{config.enableAI ? 'РАБОТАЕТ' : 'ОТКЛЮЧЕН'}</span>
                             </div>
                     </div>
-                    
                     <div className="space-y-4 relative z-10 flex-1">
                         <div>
                             <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Личность</label>
-                            <select 
-                                value={config.aiPersonality || 'helpful'} 
-                                onChange={e => setConfig({...config, aiPersonality: e.target.value})}
-                                className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors"
-                            >
+                            <select value={config.aiPersonality || 'helpful'} onChange={e => setConfig({...config, aiPersonality: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
                                 <option value="helpful">😄 Хеликс (Обычный)</option>
                                 <option value="kind">💖 Добряк</option>
                                 <option value="official">🧐 Официальный</option>
@@ -239,14 +226,9 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                 <option value="grandma">👴 Дедушка</option>
                             </select>
                         </div>
-                        
                         <div>
                             <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Стиль ответа</label>
-                            <select 
-                                value={config.aiBehavior || 'balanced'} 
-                                onChange={e => setConfig({...config, aiBehavior: e.target.value})}
-                                className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors"
-                            >
+                            <select value={config.aiBehavior || 'balanced'} onChange={e => setConfig({...config, aiBehavior: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
                                 <option value="balanced">⚖️ Сбалансированный</option>
                                 <option value="concise">⚡ Коротко и ясно</option>
                                 <option value="detailed">📜 Подробно и детально</option>
@@ -254,7 +236,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                 <option value="passive">😐 Пассивный (Минимум слов)</option>
                             </select>
                         </div>
-
                         <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
                             <div className="mb-4">
                                 <div className="flex justify-between text-xs text-gray-400 mb-1">
@@ -285,30 +266,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                 </label>
                             </div>
                         </div>
-                        
-                        <div className="bg-black/40 rounded-xl border border-gray-800 p-3 font-mono text-xs text-gray-400 h-28 overflow-hidden relative">
-                            <div className="absolute top-2 right-2 flex gap-1">
-                                <div className="w-2 h-2 rounded-full bg-gray-600"></div>
-                                <div className="w-2 h-2 rounded-full bg-gray-600"></div>
-                            </div>
-                            <div className="text-gray-500 border-b border-gray-800 pb-1 mb-2">HELIX_TERMINAL_V1.0</div>
-                            {isAiThinking ? (
-                                <div className="text-purple-400 animate-pulse">&gt; Generating response...</div>
-                            ) : (
-                                <div className="text-green-500">&gt; System Ready. Waiting for input.</div>
-                            )}
-                            <div className="mt-2 space-y-1 opacity-70">
-                                {aiStats.history && aiStats.history.filter(h=>!h.cleared).slice(0, 2).map((h, i) => (
-                                    <div key={i} className="truncate">&gt; {h.query}</div>
-                                ))}
-                            </div>
-                        </div>
-                        
                         <div className="flex gap-2 mt-auto">
-                            <button 
-                                onClick={() => setShowPlayground(true)} 
-                                className="flex-1 bg-gradient-to-r from-gray-900 to-gray-800 hover:from-gray-800 hover:to-gray-700 text-purple-300 border border-purple-900/30 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg flex items-center justify-center gap-2 group"
-                            >
+                            <button onClick={() => setShowPlayground(true)} className="flex-1 bg-gradient-to-r from-gray-900 to-gray-800 hover:from-gray-800 hover:to-gray-700 text-purple-300 border border-purple-900/30 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg flex items-center justify-center gap-2 group">
                                 <Icons.Terminal size={18} className="text-purple-500 group-hover:scale-110 transition-transform"/>
                                 <span>Тест Личности</span>
                             </button>
@@ -318,47 +277,20 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                         </div>
                     </div>
                 </div>
-
                 <div className="bg-[#121214] p-6 rounded-2xl border border-gray-800 shadow-xl">
                         <h3 className="font-bold text-lg text-white mb-4 flex items-center gap-2"><Icons.Shield className="text-red-400"/> Фильтр слов (Бан)</h3>
-                        <textarea 
-                            value={config.bannedWords || ''} 
-                            onChange={e => setConfig({...config, bannedWords: e.target.value})} 
-                            className="w-full bg-gray-900 border border-gray-700 rounded-xl p-3 text-sm text-red-300 font-mono h-24 outline-none focus:border-red-500 resize-none" 
-                            placeholder="слова через запятую..."
-                        />
-                        <button onClick={() => handleSave('ban')} className="w-full mt-4 bg-white text-black hover:bg-gray-200 py-3 rounded-xl text-sm font-bold transition-colors">
-                        {banSaveStatus || 'Сохранить изменения'}
-                    </button>
+                        <textarea value={config.bannedWords || ''} onChange={e => setConfig({...config, bannedWords: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-xl p-3 text-sm text-red-300 font-mono h-24 outline-none focus:border-red-500 resize-none" placeholder="слова через запятую..."/>
+                        <button onClick={() => handleSave('ban')} className="w-full mt-4 bg-white text-black hover:bg-gray-200 py-3 rounded-xl text-sm font-bold transition-colors">{banSaveStatus || 'Сохранить изменения'}</button>
                 </div>
-
+                {/* Playground Modal omitted for brevity, handled above */}
                 {showPlayground && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowPlayground(false)}>
                         <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl animate-slideIn flex flex-col h-[600px]" onClick={e => e.stopPropagation()}>
                             <div className="flex justify-between items-center p-4 border-b border-gray-800">
-                                <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                                    <Icons.Terminal size={20} className="text-purple-500"/> Тест Личности (Sandbox)
-                                </h3>
-                                <div className="flex items-center gap-2">
-                                    <button 
-                                        onClick={handleClearPlayground} 
-                                        className="p-2 hover:bg-red-900/20 text-gray-500 hover:text-red-400 rounded-lg transition-colors"
-                                        title="Очистить переписку"
-                                    >
-                                        <Icons.Trash2 size={18} />
-                                    </button>
-                                    <div className="w-px h-6 bg-gray-800 mx-1"></div>
-                                    <button onClick={() => setShowPlayground(false)} className="text-gray-500 hover:text-white p-1"><Icons.X size={20}/></button>
-                                </div>
+                                <h3 className="text-lg font-bold text-white flex items-center gap-2"><Icons.Terminal size={20} className="text-purple-500"/> Тест Личности (Sandbox)</h3>
+                                <button onClick={() => setShowPlayground(false)}><Icons.X size={20} className="text-gray-500 hover:text-white"/></button>
                             </div>
-                            
                             <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar bg-black/20">
-                                {playgroundHistory.length === 0 && (
-                                    <div className="text-center text-gray-600 mt-20">
-                                        <Icons.Sparkles size={48} className="mx-auto mb-2 opacity-20"/>
-                                        <p>Напишите сообщение, чтобы проверить настройки личности.</p>
-                                    </div>
-                                )}
                                 {playgroundHistory.map((msg, i) => (
                                     <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                                         <div className={`max-w-[80%] px-4 py-2 rounded-2xl text-sm leading-relaxed ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-gray-800 text-gray-200 rounded-bl-none border border-gray-700'}`}>
@@ -367,33 +299,12 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                         </div>
                                     </div>
                                 ))}
-                                {isPlaygroundThinking && (
-                                    <div className="flex justify-start">
-                                        <div className="bg-gray-800 text-purple-400 rounded-2xl rounded-bl-none px-4 py-2 text-xs flex items-center gap-2 border border-gray-700">
-                                            <div className="flex space-x-1">
-                                                <div className="w-1 h-1 bg-purple-400 rounded-full animate-bounce"></div>
-                                                <div className="w-1 h-1 bg-purple-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
-                                                <div className="w-1 h-1 bg-purple-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
-                                            </div>
-                                            <span>Печатает...</span>
-                                        </div>
-                                    </div>
-                                )}
+                                {isPlaygroundThinking && <div className="text-purple-400 text-xs">Печатает...</div>}
                                 <div ref={playgroundEndRef}/>
                             </div>
-
                             <div className="p-4 border-t border-gray-800 bg-gray-900/50 rounded-b-xl flex gap-2">
-                                <input 
-                                    value={playgroundInput} 
-                                    onChange={e => setPlaygroundInput(e.target.value)} 
-                                    onKeyDown={e => e.key === 'Enter' && handlePlaygroundSend()}
-                                    placeholder="Сообщение боту..." 
-                                    className="flex-1 bg-black border border-gray-700 rounded-lg px-4 py-2 text-white outline-none focus:border-purple-500 transition-colors"
-                                    autoFocus
-                                />
-                                <button onClick={handlePlaygroundSend} disabled={isPlaygroundThinking} className="bg-purple-600 hover:bg-purple-500 p-2 rounded-lg text-white transition-colors">
-                                    <Icons.Send size={20}/>
-                                </button>
+                                <input value={playgroundInput} onChange={e => setPlaygroundInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handlePlaygroundSend()} placeholder="Сообщение боту..." className="flex-1 bg-black border border-gray-700 rounded-lg px-4 py-2 text-white outline-none focus:border-purple-500 transition-colors" autoFocus/>
+                                <button onClick={handlePlaygroundSend} disabled={isPlaygroundThinking} className="bg-purple-600 hover:bg-purple-500 p-2 rounded-lg text-white transition-colors"><Icons.Send size={20}/></button>
                             </div>
                         </div>
                     </div>
@@ -404,7 +315,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
 
     return (
         <div className="space-y-8 relative">
-            
             {showGroupModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowGroupModal(false)}>
                     <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-4xl shadow-2xl animate-slideIn p-6" onClick={e => e.stopPropagation()}>
