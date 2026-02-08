@@ -106,7 +106,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     };
     
     const getActivityData = () => {
-        // ... (Same chart logic as before, abbreviated for space)
         const today = new Date();
         const year = today.getFullYear();
         const month = today.getMonth(); 
@@ -172,6 +171,17 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                     
                     <div className="space-y-4 relative z-10 flex-1">
+                        
+                        {/* New Model Selector */}
+                        <div>
+                            <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Модель AI (Ядро)</label>
+                            <select value={config.aiModel || 'llama-3.3-70b-versatile'} onChange={e => setConfig({...config, aiModel: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
+                                <option value="llama-3.3-70b-versatile">🧠 Llama 3.3 70B (Основная)</option>
+                                <option value="llama-3.1-8b-instant">⚡ Llama 3.1 8B (Быстрая)</option>
+                            </select>
+                            <p className="text-[10px] text-gray-500 mt-1">70B умнее и лучше держит контекст. 8B работает быстрее.</p>
+                        </div>
+
                         <div>
                             <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Личность (Характер)</label>
                             <select value={config.aiPersonality || 'helpful'} onChange={e => setConfig({...config, aiPersonality: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
