@@ -21,7 +21,6 @@ const HARDCODED_CONFIG = {
 
 const GROQ_API_KEY = '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';
 
-// Helper to reliably convert Firebase snapshots
 const toArray = <T,>(data: any): T[] => {
     if (!data) return [];
     if (Array.isArray(data)) return data;
@@ -85,58 +84,27 @@ const App = () => {
             if (unsub) unsubs.push(unsub);
         };
 
-        // 1. Config & Status
-        sub('config', (val) => { 
-            if (val) setConfig(prev => ({ ...prev, ...val })); 
-            markLoaded('config'); 
-        });
-        
-        sub('status/heartbeat', (val) => {
-            if (val) setLastHeartbeat(val);
-        });
-        
-        sub('status/active', (val) => {
-            // Если в базе явно false, то false. Если undefined или true, то true.
-            setIsBotActive(val !== false);
-        });
-
-        // 2. Data
+        sub('config', (val) => { if (val) setConfig(prev => ({ ...prev, ...val })); markLoaded('config'); });
+        sub('status/heartbeat', (val) => { if (val) setLastHeartbeat(val); });
+        sub('status/active', (val) => { setIsBotActive(val !== false); });
         sub('users', (val) => { 
             if (val) { 
                 const s = {...val}; 
-                Object.values(s).forEach((u: any) => { 
-                    if(!u.history) u.history = []; 
-                    else u.history = toArray(u.history); 
-                }); 
+                Object.values(s).forEach((u: any) => { if(!u.history) u.history = []; else u.history = toArray(u.history); }); 
                 setUsers(s); 
             } else setUsers({}); 
             markLoaded('users'); 
         });
-        
         sub('groups', (val) => { setGroups(val || {}); markLoaded('groups'); }); 
         sub('knowledgeBase', (val) => { setKnowledgeBase(toArray(val)); markLoaded('knowledgeBase'); });
         sub('commands', (val) => { setCommands(toArray(val)); markLoaded('commands'); });
         sub('quickReplies', (val) => { setQuickReplies(toArray(val)); markLoaded('quickReplies'); });
         sub('auditLogs', (val) => { setAuditLogs(toArray(val)); markLoaded('auditLogs'); });
-        sub('aiStats', (val) => { 
-            if (val) { 
-                if(!val.history) val.history = []; 
-                else val.history = toArray(val.history);
-                setAiStats(val); 
-            } else setAiStats({total:0, history:[]}); 
-            markLoaded('aiStats'); 
-        });
+        sub('aiStats', (val) => { if (val) { if(!val.history) val.history = []; else val.history = toArray(val.history); setAiStats(val); } else setAiStats({total:0, history:[]}); markLoaded('aiStats'); });
         sub('categories', (val) => { if(val) setCategories(toArray(val)); markLoaded('categories'); });
         sub('topicNames', (val) => { if(val) setTopicNames(val); markLoaded('topicNames'); });
         sub('disabledAiTopics', (val) => { if(val) setDisabledAiTopics(toArray(val)); else setDisabledAiTopics([]); markLoaded('disabledAiTopics'); });
-        sub('topicHistory', (val) => { 
-            if(val) {
-                const cleanHistory: Record<string, any[]> = {};
-                Object.entries(val).forEach(([k, v]) => { cleanHistory[k] = toArray(v); });
-                setTopicHistory(cleanHistory); 
-            } else setTopicHistory({});
-            markLoaded('topicHistory'); 
-        });
+        sub('topicHistory', (val) => { if(val) { const cleanHistory: Record<string, any[]> = {}; Object.entries(val).forEach(([k, v]) => { cleanHistory[k] = toArray(v); }); setTopicHistory(cleanHistory); } else setTopicHistory({}); markLoaded('topicHistory'); });
         sub('calendarEvents', (val) => { setCalendarEvents(toArray(val)); markLoaded('calendarEvents'); });
         sub('calendarCategories', (val) => { if(val) setCalendarCategories(toArray(val)); markLoaded('calendarCategories'); });
 
@@ -159,7 +127,7 @@ const App = () => {
         const newState = !isBotActive;
         setIsBotActive(newState);
         saveData('status/active', newState);
-        addLog('Система', newState ? 'Бот переведен в АКТИВНЫЙ режим' : 'Бот поставлен на ПАУЗУ (Тихий режим)', 'warning');
+        addLog('Система', newState ? 'Бот переведен в АКТИВНЫЙ режим' : 'Бот поставлен на ПАУЗУ', 'warning');
     };
 
     const addLog = (action: string, details: string, type: 'info' | 'warning' | 'danger' | 'success' = 'info') => {
@@ -189,9 +157,7 @@ const App = () => {
     };
 
     const handleDeleteGroup = async (groupId: string) => {
-        try {
-            await apiCall('leaveChat', { chat_id: groupId }, config);
-        } catch(e) {}
+        try { await apiCall('leaveChat', { chat_id: groupId }, config); } catch(e) {}
         const newGroups = { ...groups };
         delete newGroups[groupId];
         setGroups(newGroups);
@@ -199,8 +165,8 @@ const App = () => {
         addLog('Группы', `Группа ${groupId} удалена`, 'danger');
     };
 
-    // Calculate Uptime
-    const isOnline = (Date.now() - lastHeartbeat) < 90000; // VPS Online if heartbeat < 90s
+    // Calculate Uptime (90s threshold)
+    const isOnline = (Date.now() - lastHeartbeat) < 90000; 
 
     const TabButton = ({ id, iconKey, label, badge }: any) => {
         const isActive = activeTab === id; const Icon = Icons[iconKey as keyof typeof Icons];
@@ -224,7 +190,7 @@ const App = () => {
                         </div>
                         <div>
                             <h1 className="text-xl font-bold text-white tracking-tight">Бот Helix</h1>
-                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v2.2</span>
+                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v2.3</span>
                         </div>
                     </div>
                     
