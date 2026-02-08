@@ -1,6 +1,6 @@
 
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, onValue, set, update, get, remove } from "firebase/database";
+import { getDatabase, ref, onValue, set, update as firebaseUpdate, get, remove } from "firebase/database";
 import fetch from 'node-fetch';
 
 // ==========================================
@@ -28,13 +28,16 @@ let state = {
     topicNames: {},
     aiStats: { total: 0, history: [] },
     disabledAiTopics: [],
+    calendarEvents: [],
     isBotActive: true 
 };
 
 let lastUpdateId = 0;
 const processedUpdates = new Set();
+// Для отслеживания уже отправленных уведомлений календаря (формат: ID_DATE_TIME)
+const sentCalendarNotifications = new Set();
 
-console.log("🔥 [SERVER] Запуск сервера Helix (v6.0 Full Control)...");
+console.log("🔥 [SERVER] Запуск сервера Helix (v7.0 Stable)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -58,15 +61,16 @@ sync('knowledgeBase', 'knowledgeBase', true);
 sync('topicNames', 'topicNames');
 sync('aiStats', 'aiStats');
 sync('disabledAiTopics', 'disabledAiTopics', true);
+sync('calendarEvents', 'calendarEvents', true);
 
 onValue(ref(db, 'status/active'), (snap) => {
     state.isBotActive = snap.val() !== false; 
 });
 
-// HEARTBEAT (Чтобы сайт видел, что бот онлайн)
+// HEARTBEAT
 setInterval(() => {
-    set(ref(db, 'status/heartbeat'), Date.now());
-}, 30000); // Каждые 30 сек
+    set(ref(db, 'status/heartbeat'), Date.now()).catch(() => {});
+}, 30000);
 
 // ==========================================
 // 3. API TELEGRAM
@@ -90,6 +94,10 @@ const sendMessage = async (chatId, text, options = {}) => {
     return await apiCall('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', ...options });
 };
 
+const sendPhoto = async (chatId, photoUrl, caption, options = {}) => {
+    return await apiCall('sendPhoto', { chat_id: chatId, photo: photoUrl, caption, parse_mode: 'HTML', ...options });
+};
+
 const restrictUser = async (chatId, userId, permissions, untilDate = 0) => {
     return await apiCall('restrictChatMember', {
         chat_id: chatId,
@@ -105,27 +113,78 @@ const banUser = async (chatId, userId) => {
 };
 
 // ==========================================
-// 4. ЛОГИКА ОЧИСТКИ (00:00)
+// 4. CRON ЗАДАЧИ (Очистка + Календарь)
 // ==========================================
-const checkMidnightCleanup = async () => {
+const runCronJobs = async () => {
     const now = new Date();
-    if (now.getHours() === 0 && now.getMinutes() === 0) {
+    const timeString = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    const dateString = now.toLocaleDateString('ru-RU').split('.').reverse().join('-'); // YYYY-MM-DD
+    
+    // 1. Полночная очистка
+    if (timeString === '00:00') {
         console.log("🌙 [CRON] Полночь. Очистка...");
-        await set(ref(db, 'topicHistory'), {});
-        await set(ref(db, 'topicUnreads'), {});
-        
-        const usersRef = ref(db, 'users');
-        const snapshot = await get(usersRef);
-        const users = snapshot.val();
-        if (users) {
-            const updates = {};
-            Object.keys(users).forEach(uid => { updates[`${uid}/dailyMsgCount`] = 0; });
-            await update(usersRef, updates);
+        try {
+            await set(ref(db, 'topicHistory'), {});
+            await set(ref(db, 'topicUnreads'), {});
+            
+            const usersRef = ref(db, 'users');
+            const snapshot = await get(usersRef);
+            const users = snapshot.val();
+            if (users) {
+                const updates = {};
+                Object.keys(users).forEach(uid => { updates[`${uid}/dailyMsgCount`] = 0; });
+                await firebaseUpdate(usersRef, updates);
+            }
+        } catch (e) { console.error("Cleanup error:", e); }
+        // Пауза, чтобы не сработало много раз за минуту
+        await new Promise(r => setTimeout(r, 60000));
+    }
+
+    // 2. Уведомления Календаря
+    if (state.calendarEvents && state.config.targetChatId && state.config.enableCalendarAlerts) {
+        for (const event of state.calendarEvents) {
+            // Проверяем дату и время
+            if (event.notifyDate === dateString && event.notifyTime === timeString) {
+                const uniqueKey = `${event.id}_${dateString}_${timeString}`;
+                
+                if (!sentCalendarNotifications.has(uniqueKey)) {
+                    console.log(`📅 [CALENDAR] Отправка уведомления: ${event.title}`);
+                    sentCalendarNotifications.add(uniqueKey);
+                    
+                    const msg = `⚡️ <b>${event.title}</b>\n\n` +
+                                `📅 <b>Даты:</b> ${event.startDate} — ${event.endDate}\n` +
+                                `📂 <i>Категория: ${event.category}</i>\n\n` +
+                                `${event.description || ''}`;
+                    
+                    const inlineKeyboard = event.buttons && event.buttons.length > 0 
+                        ? { inline_keyboard: event.buttons.map(b => [{ text: b.text, url: b.url }]) }
+                        : undefined;
+
+                    const threadId = event.topicId !== 'general' ? event.topicId : undefined;
+
+                    if (event.mediaUrl && event.mediaUrl.startsWith('http')) {
+                         await sendPhoto(state.config.targetChatId, event.mediaUrl, msg, { 
+                             reply_markup: inlineKeyboard,
+                             message_thread_id: threadId
+                         });
+                    } else {
+                         await sendMessage(state.config.targetChatId, msg, { 
+                             reply_markup: inlineKeyboard,
+                             message_thread_id: threadId
+                         });
+                    }
+                }
+            }
         }
-        await new Promise(r => setTimeout(r, 65000));
+    }
+    
+    // Очистка сета отправленных уведомлений раз в день (в 00:01)
+    if (timeString === '00:01') {
+        sentCalendarNotifications.clear();
     }
 };
-setInterval(checkMidnightCleanup, 30000);
+
+setInterval(runCronJobs, 30000); // Проверка каждые 30 сек
 
 // ==========================================
 // 5. CRM & HISTORY
@@ -133,7 +192,8 @@ setInterval(checkMidnightCleanup, 30000);
 const updateUserHistory = async (user, message) => {
     try {
         const userId = user.id;
-        if (userId < 0) return; // Ignore channels/groups
+        // ФИЛЬТР ГРУПП: Если ID < 0, это группа/канал. Не пишем в CRM (список юзеров).
+        if (userId < 0) return;
 
         const userPath = `users/${userId}`;
         const snapshot = await get(ref(db, userPath));
@@ -159,7 +219,7 @@ const updateUserHistory = async (user, message) => {
         else currentUser.unreadCount = 0;
 
         await set(ref(db, userPath), currentUser);
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error("CRM Update Error:", e); }
 };
 
 const updateTopicHistory = async (topicId, message, topicNameRaw) => {
@@ -167,11 +227,10 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
         const tId = topicId || 'general';
         const path = `topicHistory/${tId}`;
         
-        // Auto-rename topic
         const currentName = state.topicNames[tId];
         const newName = topicNameRaw || (currentName ? currentName : `Topic ${tId}`);
         if (tId !== 'general' && (!currentName || (topicNameRaw && currentName !== topicNameRaw))) {
-            await update(ref(db, 'topicNames'), { [tId]: newName });
+            await firebaseUpdate(ref(db, 'topicNames'), { [tId]: newName });
         }
 
         const snapshot = await get(ref(db, path));
@@ -184,7 +243,7 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
             const unreadSnap = await get(unreadRef);
             await set(unreadRef, (unreadSnap.val() || 0) + 1);
         }
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error("Topic Update Error:", e); }
 };
 
 // ==========================================
@@ -231,7 +290,7 @@ const getAIResponse = async (question, userName) => {
     PROTOCOL:
     1. ANALYZE INPUT:
        - Type A: "Small Talk" (Hello, how are you, joke, who are you). 
-         -> ACTION: Ignore Knowledge Base. Just chat using your Personality.
+         -> ACTION: Ignore Knowledge Base limitations. Chat using your Personality.
        - Type B: "Data Query" (Runes, Armor, Stats, How to play, Drop rates, Locations). 
          -> ACTION: STRICT KNOWLEDGE BASE LOOKUP.
     
@@ -263,7 +322,7 @@ const getAIResponse = async (question, userName) => {
 };
 
 // ==========================================
-// 7. СИСТЕМНЫЕ КОМАНДЫ (FIXED WARN)
+// 7. СИСТЕМНЫЕ КОМАНДЫ (FIXED)
 // ==========================================
 const handleSystemCommand = async (command, msg, targetThread) => {
     const chatId = msg.chat.id;
@@ -277,22 +336,18 @@ const handleSystemCommand = async (command, msg, targetThread) => {
             const userPath = `users/${targetUser.id}`;
             const userSnap = await get(ref(db, userPath));
             const userData = userSnap.val() || {};
-            
-            // Increment
             const newWarns = (userData.warnings || 0) + 1;
             
-            // SAVE TO DB IMMEDIATELY
-            await update(ref(db, userPath), { warnings: newWarns, name: targetUser.first_name, username: targetUser.username });
+            await firebaseUpdate(ref(db, userPath), { warnings: newWarns, name: targetUser.first_name, username: targetUser.username });
             
             if (newWarns >= 3) {
                 await restrictUser(chatId, targetUser.id, { can_send_messages: false }, Math.floor(Date.now()/1000) + 172800);
-                await update(ref(db, userPath), { warnings: 0, status: 'muted' });
+                await firebaseUpdate(ref(db, userPath), { warnings: 0, status: 'muted' });
                 return sendMessage(chatId, `🛑 <b>${targetUser.first_name}</b> получил 3/3 варнов и заглушен на 48 часов.`, { message_thread_id: targetThread });
             } else {
                 return sendMessage(chatId, `⚠️ <b>${targetUser.first_name}</b>, предупреждение (${newWarns}/3).`, { message_thread_id: targetThread });
             }
         }
-        // ... (Other commands mute/ban similar logic)
     }
 };
 
@@ -318,7 +373,9 @@ const processUpdate = async (tgUpdate) => {
         isGroup: !isPrivate, user: user.first_name, userId: user.id
     };
 
+    // Обновляем историю. ФИЛЬТР ГРУПП ВНУТРИ updateUserHistory
     await updateUserHistory(user, logMsg);
+    // Обновляем топики (здесь группы нужны для чата на сайте)
     if (isTargetChat) await updateTopicHistory(threadId, { ...logMsg, isIncoming: true }, null);
 
     if (user.is_bot) return;
@@ -326,6 +383,14 @@ const processUpdate = async (tgUpdate) => {
 
     if (text) {
         const lowerText = text.toLowerCase();
+        
+        // --- КОМАНДА /ЛЕЩ ---
+        if (lowerText.startsWith('/лещ') || lowerText.startsWith('/slap')) {
+            const target = msg.reply_to_message ? msg.reply_to_message.from.first_name : (text.split(' ').slice(1).join(' ') || 'воздух');
+            const replyText = `👋 <b>${user.first_name}</b> дал смачного леща <b>${target}</b>!`;
+            await sendMessage(chatId, replyText, { message_thread_id: threadId !== 'general' ? threadId : undefined });
+            return;
+        }
 
         // System Commands
         if (['/warn', '/mute', '/ban', '/unmute'].some(c => lowerText.startsWith(c))) {
@@ -384,7 +449,10 @@ const startLoop = async () => {
                     }
                     if (processedUpdates.size > 5000) processedUpdates.clear();
                 }
-            } catch (e) { await new Promise(r => setTimeout(r, 5000)); }
+            } catch (e) { 
+                console.error("Polling Error:", e.message);
+                await new Promise(r => setTimeout(r, 5000)); 
+            }
         } else { await new Promise(r => setTimeout(r, 2000)); }
     }
 };

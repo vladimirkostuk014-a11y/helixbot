@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Icons } from './Icons';
 import { Message, InlineButton, QuickReply } from '../types';
 import { saveData } from '../services/firebase';
@@ -46,14 +46,23 @@ const LiveChat: React.FC<LiveChatProps> = ({
     const [buttons, setButtons] = useState<InlineButton[]>([]);
     const [btnDraft, setBtnDraft] = useState({ text: '', url: '' });
     const [showTools, setShowTools] = useState(false);
-    
-    // Rename state
     const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
     const [editName, setEditName] = useState('');
-
-    // Add Topic State
     const [showAddTopic, setShowAddTopic] = useState(false);
     const [newTopicLink, setNewTopicLink] = useState('');
+    
+    // Audio Notification
+    const prevUnreadCountRef = useRef(0);
+    useEffect(() => {
+        const totalUnread = Object.values(unreadCounts).reduce((a, b) => a + b, 0);
+        if (totalUnread > prevUnreadCountRef.current) {
+            // Play Sound
+            const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'); // Simple Ding
+            audio.volume = 0.5;
+            audio.play().catch(e => console.log("Audio play blocked", e));
+        }
+        prevUnreadCountRef.current = totalUnread;
+    }, [unreadCounts]);
 
     const send = () => {
         if (!text.trim() && !mediaFile) return;
@@ -112,8 +121,6 @@ const LiveChat: React.FC<LiveChatProps> = ({
     const handleAddTopicSubmit = () => {
         if (!newTopicLink.trim()) return;
         let id = newTopicLink.trim();
-        
-        // Try parsing URL like https://t.me/c/123456/123
         if (id.includes('t.me/c/')) {
             const parts = id.split('/');
             const lastPart = parts[parts.length - 1];
@@ -141,7 +148,6 @@ const LiveChat: React.FC<LiveChatProps> = ({
         const histB = topicHistory[b] || [];
         const timeA = histA.length > 0 ? (histA[histA.length-1].timestamp || 0) : 0;
         const timeB = histB.length > 0 ? (histB[histB.length-1].timestamp || 0) : 0;
-        // Prioritize unread
         const unreadA = unreadCounts[a] || 0;
         const unreadB = unreadCounts[b] || 0;
         if (unreadA !== unreadB) return unreadB - unreadA;
@@ -201,14 +207,11 @@ const LiveChat: React.FC<LiveChatProps> = ({
                                 )}
                             </div>
                             <div className="flex items-center gap-2">
-                                {/* Unread Badge */}
                                 {(unreadCounts[tid] || 0) > 0 && activeTopic !== tid && (
                                     <div className="bg-green-500 text-white text-[10px] font-bold px-1.5 rounded-full min-w-[16px] text-center animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.6)]">
                                         {unreadCounts[tid]}
                                     </div>
                                 )}
-
-                                {/* AI Toggle */}
                                 {onToggleAi && (
                                     <button 
                                         onClick={(e) => { e.stopPropagation(); onToggleAi(tid); }} 
@@ -218,15 +221,10 @@ const LiveChat: React.FC<LiveChatProps> = ({
                                         <div className="text-[9px] font-bold px-1">BOT</div>
                                     </button>
                                 )}
-
                                 {(topicHistory[tid] || []).length > 0 && <span className="text-[10px] bg-gray-700 px-1.5 py-0.5 rounded-full text-gray-300">{(topicHistory[tid] || []).length}</span>}
-                                
-                                {/* Edit */}
                                 <button onClick={(e) => startEditing(tid, topicNames[tid], e)} className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-white p-1">
                                     <Icons.Edit2 size={12}/>
                                 </button>
-
-                                {/* Delete */}
                                 {onDeleteTopic && (
                                     <button onClick={(e) => handleDeleteTopicClick(tid, e)} className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-500 p-1">
                                         <Icons.Trash2 size={12}/>
@@ -247,7 +245,6 @@ const LiveChat: React.FC<LiveChatProps> = ({
                         {topicNames[activeTopic]} 
                         <span className="text-xs font-normal text-gray-500 ml-2">ID: {activeTopic}</span>
                     </h3>
-                    
                     <div className="flex items-center gap-2">
                         {disabledAiTopics.includes(activeTopic) && (
                             <div className="text-xs bg-red-900/50 text-red-200 px-2 py-1 rounded border border-red-800 flex items-center gap-1">
@@ -255,11 +252,7 @@ const LiveChat: React.FC<LiveChatProps> = ({
                             </div>
                         )}
                         {onClearTopic && (
-                            <button 
-                                onClick={() => onClearTopic(activeTopic)}
-                                className="text-gray-400 hover:text-red-500 p-2 rounded-lg transition-colors bg-gray-800/50 hover:bg-gray-800 border border-gray-700"
-                                title="Очистить чат (Удалить последние сообщения)"
-                            >
+                            <button onClick={() => onClearTopic(activeTopic)} className="text-gray-400 hover:text-red-500 p-2 rounded-lg transition-colors bg-gray-800/50 hover:bg-gray-800 border border-gray-700">
                                 <Icons.Trash2 size={16}/>
                             </button>
                         )}
@@ -270,11 +263,6 @@ const LiveChat: React.FC<LiveChatProps> = ({
                     {isAiThinking && (
                         <div className="flex w-full justify-start msg-enter">
                              <div className="bg-gray-800 text-purple-400 rounded-2xl rounded-bl-none px-4 py-2 text-xs flex items-center gap-2 shadow-md">
-                                 <div className="flex space-x-1">
-                                    <div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce"></div>
-                                    <div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
-                                    <div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
-                                 </div>
                                  <span>Хеликс печатает...</span>
                              </div>
                         </div>
@@ -283,43 +271,14 @@ const LiveChat: React.FC<LiveChatProps> = ({
                         <div key={msg.id || i} className={`flex w-full ${msg.isIncoming ? 'justify-start' : 'justify-end'} msg-enter`}>
                             <div className={`max-w-[70%] rounded-2xl px-4 py-2 relative shadow-md ${msg.isIncoming ? 'bg-gray-800 text-gray-200 rounded-bl-none' : 'bg-blue-600 text-white rounded-br-none'}`}>
                                 {msg.isIncoming && <div className="text-[11px] font-bold text-blue-400 mb-0.5 cursor-pointer hover:underline" onClick={() => setText(`@${msg.user} `)}>{msg.user}</div>}
-                                
-                                {msg.mediaUrl ? (
-                                    <div className="mb-2">
-                                        {msg.type === 'video' ? (
-                                            <video src={msg.mediaUrl} controls className="max-w-full rounded-lg max-h-48" />
-                                        ) : (
-                                            <img src={msg.mediaUrl} alt="media" className="max-w-full rounded-lg max-h-48 object-cover" />
-                                        )}
-                                    </div>
-                                ) : (
-                                    <>
-                                        {msg.type === 'photo' && <div className="mb-2 text-xs bg-white/10 p-2 rounded flex items-center gap-2"><Icons.Sticker size={16}/> [Фото]</div>}
-                                        {msg.type === 'sticker' && <div className="mb-2 text-xs bg-white/10 p-2 rounded flex items-center gap-2"><Icons.Sticker size={16}/> [Стикер]</div>}
-                                        {msg.type === 'voice' && <div className="mb-2 text-xs bg-white/10 p-2 rounded flex items-center gap-2"><Icons.Mic size={16}/> [Голосовое сообщение]</div>}
-                                        {msg.type === 'video' && <div className="mb-2 text-xs bg-white/10 p-2 rounded flex items-center gap-2"><Icons.Video size={16}/> [Видео]</div>}
-                                        {msg.type === 'video_note' && <div className="mb-2 text-xs bg-white/10 p-2 rounded flex items-center gap-2"><Icons.Video size={16}/> [Видеосообщение]</div>}
-                                    </>
-                                )}
-                                
                                 {msg.text && <div className="text-sm whitespace-pre-wrap leading-relaxed">{msg.text}</div>}
-                                
-                                {msg.buttons && msg.buttons.length > 0 && (
-                                    <div className="mt-2 pt-2 border-t border-white/10 flex flex-wrap gap-2">
-                                        {msg.buttons.map((b, bi) => (
-                                            <div key={bi} className="bg-black/20 px-2 py-1 rounded text-xs border border-white/10">{b.text}</div>
-                                        ))}
-                                    </div>
-                                )}
                                 <div className="text-[10px] opacity-60 text-right mt-1">{msg.time}</div>
                             </div>
                         </div>
                     ))}
                 </div>
 
-                {/* Input Area */}
                 <div className="p-3 bg-gray-900/90 border-t border-gray-700 z-10 relative">
-                    {/* Tools */}
                     {showTools && (
                         <div className="mb-2 p-2 bg-gray-800 rounded-lg animate-slideIn">
                             <div className="flex items-center gap-2 mb-2">
@@ -334,13 +293,6 @@ const LiveChat: React.FC<LiveChatProps> = ({
                                 <input value={btnDraft.text} onChange={e => setBtnDraft({...btnDraft, text: e.target.value})} placeholder="Кнопка" className="w-1/3 bg-black border border-gray-600 rounded px-2 py-1 text-xs text-white"/>
                                 <input value={btnDraft.url} onChange={e => setBtnDraft({...btnDraft, url: e.target.value})} placeholder="URL" className="flex-1 bg-black border border-gray-600 rounded px-2 py-1 text-xs text-white"/>
                                 <button onClick={addBtn} className="bg-blue-600 px-2 rounded text-white"><Icons.Plus size={14}/></button>
-                            </div>
-                            <div className="flex flex-wrap gap-2 mt-2">
-                                {buttons.map((b, i) => (
-                                    <div key={i} className="bg-blue-900/30 text-blue-200 px-2 py-0.5 rounded text-xs border border-blue-500/30 flex items-center gap-1">
-                                        {b.text} <button onClick={() => setButtons(buttons.filter((_, idx) => idx !== i))}><Icons.X size={10}/></button>
-                                    </div>
-                                ))}
                             </div>
                         </div>
                     )}
