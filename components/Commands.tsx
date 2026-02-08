@@ -35,6 +35,7 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
             mediaUrl: currentCmd.mediaUrl || '',
             buttons: currentCmd.buttons || [],
             isSystem: currentCmd.isSystem || false,
+            muteDuration: currentCmd.muteDuration, // Save mute duration
             allowedTopicId: currentCmd.allowedTopicId || undefined,
             notificationTopicId: currentCmd.notificationTopicId || undefined,
             allowedRoles: currentCmd.allowedRoles || ['user', 'admin'],
@@ -157,6 +158,21 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
                                 </select>
                             </div>
                         </div>
+                        
+                        {/* Special Field for Mute Command */}
+                        {currentCmd.trigger === '/mute' && (
+                             <div className="bg-yellow-900/20 p-4 rounded-xl border border-yellow-700/50">
+                                <label className="text-xs text-yellow-500 uppercase font-bold block mb-1">Длительность мута (минуты)</label>
+                                <input 
+                                    type="number"
+                                    value={currentCmd.muteDuration || 60} 
+                                    onChange={e => setCurrentCmd({...currentCmd, muteDuration: parseInt(e.target.value)})} 
+                                    className="w-full bg-black border border-yellow-700/50 rounded p-2.5 text-white outline-none focus:border-yellow-500"
+                                    placeholder="60"
+                                />
+                                <div className="text-[10px] text-gray-400 mt-1">По умолчанию: 60 минут (1 час)</div>
+                             </div>
+                        )}
 
                         {/* Allowed Roles */}
                         <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">

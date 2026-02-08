@@ -96,6 +96,7 @@ export interface Command {
     mediaUrl: string;
     buttons: InlineButton[];
     isSystem?: boolean;
+    muteDuration?: number; // Duration in minutes for /mute command
     allowedTopicId?: string; // Где работает (для обычных команд)
     notificationTopicId?: string; // Куда присылать ответ (для системных)
     allowedRoles?: ('user' | 'moderator' | 'admin')[]; // Кто может использовать

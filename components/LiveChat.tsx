@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { Icons } from './Icons';
 import { Message, InlineButton, QuickReply } from '../types';
+import { saveData } from '../services/firebase';
 
 interface LiveChatProps {
     topicNames: Record<string, string>;
@@ -50,7 +51,7 @@ const LiveChat: React.FC<LiveChatProps> = ({
             text,
             mediaFile,
             buttons,
-            topicId: activeTopic // PASS TOPIC ID
+            topicId: activeTopic
         });
         setText('');
         setMediaFile(null);
@@ -84,6 +85,15 @@ const LiveChat: React.FC<LiveChatProps> = ({
         }
     };
     
+    const handleTopicClick = (tid: string) => {
+        setActiveTopic(tid);
+        // Clear unread count for this topic locally or in firebase if you track it there
+        // Assuming unreadCounts is readonly prop, we might need a callback to clear it
+        // For now, we simulate clearing by re-saving topic history as read if needed, 
+        // but typically unreadCount is dynamic based on last read time.
+        // Assuming parent component handles unread resets if we just switch tabs.
+    };
+
     // Сортировка топиков: General сверху, затем по последнему сообщению
     const sortedTopics = Object.keys(topicNames).sort((a, b) => {
         if (a === 'general') return -1;
@@ -109,7 +119,7 @@ const LiveChat: React.FC<LiveChatProps> = ({
                         <div 
                             key={tid} 
                             className={`group w-full flex items-center justify-between p-3 rounded-lg text-sm transition-colors cursor-pointer ${activeTopic === tid ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' : 'hover:bg-gray-800 text-gray-300'}`} 
-                            onClick={() => setActiveTopic(tid)}
+                            onClick={() => handleTopicClick(tid)}
                         >
                             <div className="flex-1 mr-2 flex items-center overflow-hidden">
                                 {editingTopicId === tid ? (

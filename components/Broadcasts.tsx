@@ -38,10 +38,16 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
         setExcludedIds(newSet);
     };
 
-    // Filter valid users (not banned)
+    // Filter valid users (not banned) AND SORT: Admins first, then Alphabetical
     const validUsers = (Object.values(users) as User[])
         .filter(u => u.status !== 'banned')
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .sort((a, b) => {
+            // 1. Admins First
+            if (a.role === 'admin' && b.role !== 'admin') return -1;
+            if (a.role !== 'admin' && b.role === 'admin') return 1;
+            // 2. Then Alphabetical by Name
+            return a.name.localeCompare(b.name);
+        });
 
     // Displayed users (filtered by search)
     const displayedUsers = validUsers.filter(u => 

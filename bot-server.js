@@ -36,7 +36,7 @@ let state = {
 let lastUpdateId = 0;
 const processedUpdates = new Set();
 
-console.log("🔥 [SERVER] Запуск сервера Helix (v4.0 Mega Patch)...");
+console.log("🔥 [SERVER] Запуск сервера Helix (v4.5 Live Patch)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -155,12 +155,13 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
         const path = `topicHistory/${tId}`;
         
         // Авто-регистрация новой темы
+        // Если ID не general и такого топика еще нет в локальном стейте ИЛИ пришло явное имя
+        const currentName = state.topicNames[tId];
+        const newName = topicNameRaw || (currentName ? currentName : `Topic ${tId}`);
+        
         if (tId !== 'general') {
-            const currentName = state.topicNames[tId];
-            const newName = topicNameRaw || (currentName ? currentName : `Topic ${tId}`);
-            
-            // Если топика нет в базе или имя обновилось - сохраняем
             if (!currentName || (topicNameRaw && currentName !== topicNameRaw)) {
+                console.log(`[TOPIC] Registering/Updating topic: ${tId} -> ${newName}`);
                 await update(ref(db, 'topicNames'), { [tId]: newName });
                 state.topicNames[tId] = newName; 
             }
@@ -252,7 +253,7 @@ const handleSystemCommand = async (command, msg, targetThread) => {
             const userData = userSnapshot.val() || {};
             const warns = (userData.warnings || 0) + 1;
             
-            // Сразу обновляем Firebase
+            // Сразу обновляем Firebase для CRM
             await update(ref(db, `users/${targetUser.id}`), { warnings: warns });
             
             if (warns >= 3) {
@@ -268,10 +269,15 @@ const handleSystemCommand = async (command, msg, targetThread) => {
 
         // MUTE
         if (command === '/mute') {
-            const res = await restrictUser(chatId, targetUser.id, { can_send_messages: false }, Math.floor(Date.now()/1000) + 3600);
+            // Find custom mute duration if available
+            const cmdConfig = state.commands.find(c => c.trigger === '/mute');
+            const durationMins = cmdConfig && cmdConfig.muteDuration ? cmdConfig.muteDuration : 60;
+            const until = Math.floor(Date.now()/1000) + (durationMins * 60);
+
+            const res = await restrictUser(chatId, targetUser.id, { can_send_messages: false }, until);
             if (res.ok) {
                 await update(ref(db, `users/${targetUser.id}`), { status: 'muted' });
-                return sendMessage(chatId, `😶 <b>${targetName}</b> заглушен на 1 час.`, { message_thread_id: targetThread });
+                return sendMessage(chatId, `😶 <b>${targetName}</b> заглушен на ${durationMins} мин.`, { message_thread_id: targetThread });
             }
         }
 
@@ -310,24 +316,21 @@ const processUpdate = async (update) => {
     const threadId = msg.message_thread_id ? String(msg.message_thread_id) : 'general';
     
     // --- AUTO-TOPIC DISCOVERY ---
-    // Если создана новая тема
-    if (msg.forum_topic_created) {
-        const newTopicName = msg.forum_topic_created.name;
-        const newTopicId = String(msg.message_thread_id); // ID темы равен message_thread_id первого сообщения
-        console.log(`[TOPIC] Обнаружена новая тема: ${newTopicName} (${newTopicId})`);
-        await update(ref(db, 'topicNames'), { [newTopicId]: newTopicName });
-        state.topicNames[newTopicId] = newTopicName;
-    }
-    // Если сообщение пришло в тему, которой нет в базе (и это не создание)
-    if (isTargetChat && threadId !== 'general' && !state.topicNames[threadId]) {
-        // Мы не знаем имя, если пропустили создание, но сохраним ID
-        // Попытаемся угадать имя если это reply на создание (маловероятно)
-        const name = `Topic ${threadId}`;
-        await update(ref(db, 'topicNames'), { [threadId]: name });
-        state.topicNames[threadId] = name;
-    }
+    const topicNameGuess = msg.reply_to_message?.forum_topic_created?.name || 
+                          (msg.forum_topic_created ? msg.forum_topic_created.name : null);
 
-    const topicNameGuess = msg.reply_to_message?.forum_topic_created?.name || null;
+    // Force register topic on ANY message if it's not general
+    if (isTargetChat && threadId !== 'general') {
+        const knownName = state.topicNames[threadId];
+        // If we don't know the name, try to guess or use ID
+        const nameToSave = topicNameGuess || knownName || `Topic ${threadId}`;
+        
+        // If it's new or we found a better name (from creation event), update it
+        if (!knownName || (topicNameGuess && knownName !== topicNameGuess)) {
+             await update(ref(db, 'topicNames'), { [threadId]: nameToSave });
+             state.topicNames[threadId] = nameToSave;
+        }
+    }
 
     // Определяем тип и медиа для логов
     let msgType = 'text';
