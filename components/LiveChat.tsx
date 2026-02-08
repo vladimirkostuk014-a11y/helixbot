@@ -18,6 +18,7 @@ interface LiveChatProps {
     unreadCounts?: Record<string, number>; 
     quickReplies?: QuickReply[];
     setQuickReplies?: (replies: QuickReply[]) => void;
+    onAddTopic?: (id: string, name: string) => void;
 }
 
 const LiveChat: React.FC<LiveChatProps> = ({ 
@@ -33,7 +34,8 @@ const LiveChat: React.FC<LiveChatProps> = ({
     onClearTopic,
     unreadCounts = {},
     quickReplies = [],
-    setQuickReplies
+    setQuickReplies,
+    onAddTopic
 }) => {
     const [text, setText] = useState('');
     const [mediaFile, setMediaFile] = useState<File | null>(null);
@@ -44,6 +46,10 @@ const LiveChat: React.FC<LiveChatProps> = ({
     // Rename state
     const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
     const [editName, setEditName] = useState('');
+
+    // Add Topic State
+    const [showAddTopic, setShowAddTopic] = useState(false);
+    const [newTopicLink, setNewTopicLink] = useState('');
 
     const send = () => {
         if (!text.trim() && !mediaFile) return;
@@ -87,11 +93,32 @@ const LiveChat: React.FC<LiveChatProps> = ({
     
     const handleTopicClick = (tid: string) => {
         setActiveTopic(tid);
-        // Clear unread count for this topic locally or in firebase if you track it there
-        // Assuming unreadCounts is readonly prop, we might need a callback to clear it
-        // For now, we simulate clearing by re-saving topic history as read if needed, 
-        // but typically unreadCount is dynamic based on last read time.
-        // Assuming parent component handles unread resets if we just switch tabs.
+    };
+
+    const handleAddTopicSubmit = () => {
+        if (!newTopicLink.trim()) return;
+        let id = newTopicLink.trim();
+        
+        // Try parsing URL like https://t.me/c/123456/123
+        if (id.includes('t.me/c/')) {
+            const parts = id.split('/');
+            const lastPart = parts[parts.length - 1];
+            if (!isNaN(Number(lastPart))) {
+                id = lastPart;
+            }
+        } else if (id.includes('/')) {
+             // Handle simple copy paste like t.me/c/123/123
+             const parts = id.split('/');
+             const lastPart = parts[parts.length - 1];
+             if (!isNaN(Number(lastPart))) id = lastPart;
+        }
+
+        if (id && onAddTopic) {
+            onAddTopic(id, `Topic ${id}`);
+            setActiveTopic(id);
+            setNewTopicLink('');
+            setShowAddTopic(false);
+        }
     };
 
     // Сортировка топиков: General сверху, затем по последнему сообщению
@@ -109,11 +136,30 @@ const LiveChat: React.FC<LiveChatProps> = ({
         <div className="flex gap-4 h-[calc(100vh-100px)]">
             {/* Sidebar: Topics */}
             <div className="w-1/4 bg-gray-800/30 border border-gray-700 rounded-xl overflow-hidden flex flex-col">
-                <div className="p-4 border-b border-gray-700 bg-gray-900/50">
+                <div className="p-4 border-b border-gray-700 bg-gray-900/50 flex justify-between items-center">
                     <h3 className="font-bold text-gray-400 text-xs uppercase flex items-center gap-2">
                         <Icons.Hash size={14}/> Темы сообщества
                     </h3>
+                    <button onClick={() => setShowAddTopic(!showAddTopic)} className="text-gray-400 hover:text-white p-1 rounded hover:bg-gray-800 transition-colors">
+                        <Icons.Plus size={14}/>
+                    </button>
                 </div>
+                
+                {showAddTopic && (
+                    <div className="p-2 bg-gray-800 border-b border-gray-700 animate-slideIn">
+                        <div className="text-[10px] text-gray-400 mb-1">ID темы или ссылка</div>
+                        <div className="flex gap-2">
+                            <input 
+                                value={newTopicLink} 
+                                onChange={e => setNewTopicLink(e.target.value)} 
+                                placeholder=".../123"
+                                className="w-full bg-black border border-gray-600 rounded px-2 py-1 text-xs text-white"
+                            />
+                            <button onClick={handleAddTopicSubmit} className="bg-blue-600 px-2 rounded text-white text-xs">OK</button>
+                        </div>
+                    </div>
+                )}
+
                 <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
                     {sortedTopics.map(tid => (
                         <div 

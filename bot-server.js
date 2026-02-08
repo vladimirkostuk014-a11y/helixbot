@@ -36,7 +36,7 @@ let state = {
 let lastUpdateId = 0;
 const processedUpdates = new Set();
 
-console.log("🔥 [SERVER] Запуск сервера Helix (v4.5 Live Patch)...");
+console.log("🔥 [SERVER] Запуск сервера Helix (v4.6 Fix Patch)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -162,6 +162,7 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
         if (tId !== 'general') {
             if (!currentName || (topicNameRaw && currentName !== topicNameRaw)) {
                 console.log(`[TOPIC] Registering/Updating topic: ${tId} -> ${newName}`);
+                // Fix: Using firebase update function correctly
                 await update(ref(db, 'topicNames'), { [tId]: newName });
                 state.topicNames[tId] = newName; 
             }
@@ -248,12 +249,10 @@ const handleSystemCommand = async (command, msg, targetThread) => {
 
         // WARN
         if (command === '/warn') {
-            // Читаем из Firebase актуальное состояние
             const userSnapshot = await get(ref(db, `users/${targetUser.id}`));
             const userData = userSnapshot.val() || {};
             const warns = (userData.warnings || 0) + 1;
             
-            // Сразу обновляем Firebase для CRM
             await update(ref(db, `users/${targetUser.id}`), { warnings: warns });
             
             if (warns >= 3) {
@@ -269,7 +268,6 @@ const handleSystemCommand = async (command, msg, targetThread) => {
 
         // MUTE
         if (command === '/mute') {
-            // Find custom mute duration if available
             const cmdConfig = state.commands.find(c => c.trigger === '/mute');
             const durationMins = cmdConfig && cmdConfig.muteDuration ? cmdConfig.muteDuration : 60;
             const until = Math.floor(Date.now()/1000) + (durationMins * 60);
@@ -304,8 +302,9 @@ const handleSystemCommand = async (command, msg, targetThread) => {
 // ==========================================
 // 7. ОБРАБОТКА СООБЩЕНИЙ (MAIN)
 // ==========================================
-const processUpdate = async (update) => {
-    const msg = update.message;
+// !!! FIX: Changed argument name to tgUpdate to avoid shadowing imported 'update' function
+const processUpdate = async (tgUpdate) => {
+    const msg = tgUpdate.message;
     if (!msg) return; 
 
     const chatId = msg.chat.id;
@@ -322,11 +321,10 @@ const processUpdate = async (update) => {
     // Force register topic on ANY message if it's not general
     if (isTargetChat && threadId !== 'general') {
         const knownName = state.topicNames[threadId];
-        // If we don't know the name, try to guess or use ID
         const nameToSave = topicNameGuess || knownName || `Topic ${threadId}`;
         
-        // If it's new or we found a better name (from creation event), update it
         if (!knownName || (topicNameGuess && knownName !== topicNameGuess)) {
+             // Now this calls the Firebase update function correctly
              await update(ref(db, 'topicNames'), { [threadId]: nameToSave });
              state.topicNames[threadId] = nameToSave;
         }
@@ -401,17 +399,14 @@ const processUpdate = async (update) => {
         const firstWord = lowerText.split(' ')[0];
         
         // --- SLAP COMMAND (/лещ) ---
-        // Ищем команду, которая начинается так же, как текст сообщения (для команд с аргументами)
         const slapCommand = state.commands.find(c => 
             c.trigger.toLowerCase() === firstWord && 
             (c.trigger === '/лещ' || c.trigger === '/slap')
         );
 
         if (slapCommand) {
-            // Берем всё, что после команды
             const target = text.substring(firstWord.length).trim();
             if (target) {
-                // Подставляем target в {target} или просто добавляем в конец если placeholder нет
                 let responseText = slapCommand.response;
                 if (responseText.includes('{target}')) {
                     responseText = responseText.replace('{target}', target);
@@ -423,10 +418,9 @@ const processUpdate = async (update) => {
                     message_thread_id: threadId !== 'general' ? threadId : undefined,
                     reply_to_message_id: msg.message_id 
                 });
-                return; // Завершаем, чтобы не сработал AI
+                return; 
             }
         }
-        // ---------------------------
 
         if (['/warn', '/mute', '/ban', '/unmute'].some(c => lowerText.startsWith(c))) {
             const cmd = lowerText.split(' ')[0];
