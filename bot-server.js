@@ -36,7 +36,7 @@ let state = {
 let lastUpdateId = 0;
 const processedUpdates = new Set();
 
-console.log("🔥 [SERVER] Запуск сервера Helix (v3.5 Final Patch)...");
+console.log("🔥 [SERVER] Запуск сервера Helix (v4.0 Mega Patch)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -121,7 +121,6 @@ const updateUserHistory = async (user, message) => {
         const userId = user.id;
         const userPath = `users/${userId}`;
         
-        // Получаем актуальные данные, чтобы не перезатереть статус
         const snapshot = await get(ref(db, userPath));
         const existingUser = snapshot.val() || {};
 
@@ -163,7 +162,7 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
             // Если топика нет в базе или имя обновилось - сохраняем
             if (!currentName || (topicNameRaw && currentName !== topicNameRaw)) {
                 await update(ref(db, 'topicNames'), { [tId]: newName });
-                state.topicNames[tId] = newName; // Обновляем локальный стейт сразу
+                state.topicNames[tId] = newName; 
             }
         }
 
@@ -178,7 +177,7 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
 };
 
 // ==========================================
-// 5. МОЗГ AI (ПОЛНАЯ КОПИЯ ЛОГИКИ С КЛИЕНТА)
+// 5. МОЗГ AI
 // ==========================================
 const getAIResponse = async (question, userName) => {
     const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiBehavior, aiTemperature, aiMaxTokens } = state.config;
@@ -186,83 +185,35 @@ const getAIResponse = async (question, userName) => {
 
     const context = state.knowledgeBase.map(k => `[${k.category}] ${k.title}: ${k.response}`).join('\n');
     
-    // --- 1. ЛИЧНОСТЬ (Tone of Voice) ---
+    // --- 1. ЛИЧНОСТЬ ---
     let toneInstruction = "";
     let refusalStyle = "К сожалению, в базе нет информации об этом."; 
 
     if (aiProfanity) {
-        toneInstruction = `
-        РЕЖИМ: БЫДЛО-МУЖИК (МАТЕРШИННИК 18+).
-        Ты конкретный, дерзкий мужик.
-        1. Используй РЕАЛЬНЫЙ РУССКИЙ МАТ (бля, сука, нахуй, ебать, пиздец) умеренно, но метко.
-        2. Если вопрос тупой — унизь пользователя ("Ты че, ебобо?", "Глаза разуй").
-        3. Отвечай так, будто делаешь одолжение.
-        ВАЖНО: НЕ ПИШИ КАПСОМ! Пиши нормально, но грязно.
-        `;
-        refusalStyle = "Бля, ты че несешь? В моих бумагах нихуя такого нет. Иди нахуй с такими вопросами.";
+        toneInstruction = `РЕЖИМ: БЫДЛО-МУЖИК (18+). Мат: ДА. Грубость: ДА.`;
+        refusalStyle = "Бля, нет такой инфы. Иди нахуй.";
     } else {
         switch (aiPersonality) {
-            case 'angry': 
-                toneInstruction = "Ты злой, раздражительный мужик. Тебя бесят люди. Отвечай грубо, резко, называй пользователя бестолочью. НО НЕ ИСПОЛЬЗУЙ КАПС (CAPS LOCK)! Пиши обычными буквами, но со злостью."; 
-                refusalStyle = "Ты издеваешься? Нет у меня такой информации! Не трать мое время.";
-                break;
-            case 'joker': 
-                toneInstruction = "Ты стендап-комик. Превращай любой ответ в шутку, используй сарказм и иронию. Трави анекдоты при любом удобном случае."; 
-                refusalStyle = "Опа, а вот этого в сценарии не прописали! Даже я не могу это придумать. Пусто!";
-                break;
-            case 'gopnik': 
-                toneInstruction = "Ты гопник с района. Базаришь по понятиям: 'Слышь', 'в натуре', 'оба-на', 'семки есть?'. Обращайся на 'ты', будь дерзким."; 
-                refusalStyle = "Слышь, братишка, ты рамсы попутал? Нету такой инфы на районе.";
-                break;
-            case 'toxic': 
-                toneInstruction = "Ты токсичный геймер/тролль. Унижай интеллект пользователя, называй нубом, пиши 'ez', 'skill issue', 'удали доту'."; 
-                refusalStyle = "Лол, ну ты и нуб. Даже запрос нормально сделать не можешь. Нет данных, удали игру.";
-                break;
-            case 'official': 
-                toneInstruction = "Ты строгий бюрократ. Сухой, официальный стиль. Ссылайся на регламенты и инструкции. Никаких эмоций."; 
-                refusalStyle = "Согласно реестру данных, запрашиваемая информация отсутствует. Запрос отклонен.";
-                break;
-            case 'kind': 
-                toneInstruction = "Ты очень добрый старший брат. Заботливый, вежливый, всегда поддержишь. Обращайся 'дружище' или 'солнышко'."; 
-                refusalStyle = "Извини, дружище, но я перерыл все записи и ничего не нашел :( Попробуй спросить что-то другое.";
-                break;
-            case 'philosopher': 
-                toneInstruction = "Ты философ. Отвечай глубокомысленно, метафорами о бытии, даже на простые вопросы."; 
-                refusalStyle = "Знание — это свет, но сейчас передо мной лишь тьма. В базе нет ответа на твой вопрос.";
-                break;
-            case 'cyberpunk': 
-                toneInstruction = "Ты хакер из будущего. Используй сленг: 'netrunner', 'ICE', 'glitch', 'connect', 'implant'."; 
-                refusalStyle = "Ошибка доступа 404. Данные в нейросети не найдены. Системный сбой.";
-                break;
-            case 'grandma': 
-                toneInstruction = "Ты ворчливый дед (мужчина). Вспоминай 'как было раньше', называй всех 'салагами' или 'внучками'. Жалуйся на спину."; 
-                refusalStyle = "Эх, молодежь... Спрашиваете ерунду всякую. Нет у меня такого в записной книжке!";
-                break;
-            default: // helpful
-                toneInstruction = "Ты — Хеликс, полезный и уверенный помощник-мужчина. Общаешься кратко и по делу, без лишней воды.";
-                refusalStyle = "В моей базе знаний нет информации по этому вопросу.";
+            case 'angry': toneInstruction = "Ты злой. Отвечай грубо."; refusalStyle = "Нет данных! Отвали."; break;
+            case 'joker': toneInstruction = "Ты комик. Шути."; refusalStyle = "Этого в сценарии нет!"; break;
+            case 'gopnik': toneInstruction = "Ты гопник. Сленг."; refusalStyle = "Нету инфы, братишка."; break;
+            case 'kind': toneInstruction = "Ты добрый брат."; refusalStyle = "Прости, не нашел :("; break;
+            default: toneInstruction = "Ты полезный помощник."; refusalStyle = "В базе нет информации.";
         }
     }
 
-    // --- 2. СТИЛЬ (Длина и структура) ---
-    let styleInstruction = "Отвечай нормально, 2-3 предложения.";
-    switch (aiBehavior) {
-        case 'concise': styleInstruction = "Отвечай МАКСИМАЛЬНО КОРОТКО. 1 предложение. Как отрезал."; break;
-        case 'detailed': styleInstruction = "Отвечай подробно, расписывай детали, используй списки, если есть что перечислять. Давай развернутый ответ."; break;
-        case 'passive': styleInstruction = "Отвечай лениво, без энтузиазма. Минимум слов. Маленькими буквами. Тебе лень писать."; break;
-        case 'mentor': styleInstruction = "Отвечай поучительно, объясняй суть, как учитель ученику. Проверяй, понял ли пользователь."; break;
-    }
+    // --- 2. СТИЛЬ ---
+    let styleInstruction = "2-3 предложения.";
+    if (aiBehavior === 'concise') styleInstruction = "1 предложение.";
 
     const systemPrompt = `
     ROLE: ${toneInstruction}
     USER: ${userName}
-    
+    CONTEXT: ${context}
     INSTRUCTIONS:
-    1. SMALL TALK: Отвечай свободно на приветствия.
-    2. FACTS: ИСПОЛЬЗУЙ ТОЛЬКО CONTEXT НИЖЕ.
-       CONTEXT: ${context}
-    3. UNKNOWN: Если нет в контексте, ты ОБЯЗАН ответить: "${refusalStyle}".
-    4. FORMAT: ${styleInstruction}
+    1. ИСПОЛЬЗУЙ ТОЛЬКО CONTEXT.
+    2. Если нет в CONTEXT -> "${refusalStyle}".
+    3. FORMAT: ${styleInstruction}
     `;
 
     try {
@@ -272,7 +223,7 @@ const getAIResponse = async (question, userName) => {
             body: JSON.stringify({
                 model: aiModel || "llama-3.3-70b-versatile",
                 messages: [{ role: "system", content: systemPrompt }, { role: "user", content: question }],
-                temperature: aiTemperature || 0.6, 
+                temperature: aiTemperature || 0.5, 
                 max_tokens: aiMaxTokens || 800
             })
         });
@@ -296,9 +247,12 @@ const handleSystemCommand = async (command, msg, targetThread) => {
 
         // WARN
         if (command === '/warn') {
-            const userRef = (await get(ref(db, `users/${targetUser.id}`))).val() || {};
-            const warns = (userRef.warnings || 0) + 1;
+            // Читаем из Firebase актуальное состояние
+            const userSnapshot = await get(ref(db, `users/${targetUser.id}`));
+            const userData = userSnapshot.val() || {};
+            const warns = (userData.warnings || 0) + 1;
             
+            // Сразу обновляем Firebase
             await update(ref(db, `users/${targetUser.id}`), { warnings: warns });
             
             if (warns >= 3) {
@@ -354,6 +308,25 @@ const processUpdate = async (update) => {
     const isPrivate = msg.chat.type === 'private';
     const isTargetChat = String(chatId) === state.config.targetChatId;
     const threadId = msg.message_thread_id ? String(msg.message_thread_id) : 'general';
+    
+    // --- AUTO-TOPIC DISCOVERY ---
+    // Если создана новая тема
+    if (msg.forum_topic_created) {
+        const newTopicName = msg.forum_topic_created.name;
+        const newTopicId = String(msg.message_thread_id); // ID темы равен message_thread_id первого сообщения
+        console.log(`[TOPIC] Обнаружена новая тема: ${newTopicName} (${newTopicId})`);
+        await update(ref(db, 'topicNames'), { [newTopicId]: newTopicName });
+        state.topicNames[newTopicId] = newTopicName;
+    }
+    // Если сообщение пришло в тему, которой нет в базе (и это не создание)
+    if (isTargetChat && threadId !== 'general' && !state.topicNames[threadId]) {
+        // Мы не знаем имя, если пропустили создание, но сохраним ID
+        // Попытаемся угадать имя если это reply на создание (маловероятно)
+        const name = `Topic ${threadId}`;
+        await update(ref(db, 'topicNames'), { [threadId]: name });
+        state.topicNames[threadId] = name;
+    }
+
     const topicNameGuess = msg.reply_to_message?.forum_topic_created?.name || null;
 
     // Определяем тип и медиа для логов
@@ -367,7 +340,6 @@ const processUpdate = async (update) => {
     else if (msg.sticker) { msgType = 'sticker'; }
     else if (msg.document) { msgType = 'document'; }
     
-    // Если текста нет, но есть медиа - ставим заглушку для админки
     const displayText = text || (mediaUrl ? `[${mediaUrl}]` : `[${msgType}]`);
 
     // 1. ПРОВЕРКА ОТКЛЮЧЕННЫХ ГРУПП
@@ -388,7 +360,7 @@ const processUpdate = async (update) => {
         dir: 'in',
         text: displayText,
         type: msgType,
-        mediaUrl: mediaUrl === 'Photo' || mediaUrl === 'Voice' ? '' : mediaUrl, // Пустая строка URL т.к. мы не качаем файлы на сервер
+        mediaUrl: mediaUrl === 'Photo' || mediaUrl === 'Voice' ? '' : mediaUrl, 
         time: new Date().toLocaleTimeString('ru-RU'),
         timestamp: Date.now(),
         isGroup: !isPrivate,
@@ -396,7 +368,6 @@ const processUpdate = async (update) => {
         userId: user.id
     };
 
-    // Сохраняем всегда
     await updateUserHistory(user, logMsg);
     if (isTargetChat) {
         await updateTopicHistory(threadId, { ...logMsg, isIncoming: true }, topicNameGuess);
@@ -424,7 +395,36 @@ const processUpdate = async (update) => {
     // 3. КОМАНДЫ (Только если есть текст)
     if (text) {
         const lowerText = text.toLowerCase();
+        const firstWord = lowerText.split(' ')[0];
         
+        // --- SLAP COMMAND (/лещ) ---
+        // Ищем команду, которая начинается так же, как текст сообщения (для команд с аргументами)
+        const slapCommand = state.commands.find(c => 
+            c.trigger.toLowerCase() === firstWord && 
+            (c.trigger === '/лещ' || c.trigger === '/slap')
+        );
+
+        if (slapCommand) {
+            // Берем всё, что после команды
+            const target = text.substring(firstWord.length).trim();
+            if (target) {
+                // Подставляем target в {target} или просто добавляем в конец если placeholder нет
+                let responseText = slapCommand.response;
+                if (responseText.includes('{target}')) {
+                    responseText = responseText.replace('{target}', target);
+                } else {
+                    responseText = `${responseText} ${target}`;
+                }
+
+                await sendMessage(chatId, responseText, { 
+                    message_thread_id: threadId !== 'general' ? threadId : undefined,
+                    reply_to_message_id: msg.message_id 
+                });
+                return; // Завершаем, чтобы не сработал AI
+            }
+        }
+        // ---------------------------
+
         if (['/warn', '/mute', '/ban', '/unmute'].some(c => lowerText.startsWith(c))) {
             const cmd = lowerText.split(' ')[0];
             if (state.config.adminIds && state.config.adminIds.includes(String(user.id))) {
@@ -462,7 +462,6 @@ const processUpdate = async (update) => {
 
             if (isMention && !isDisabled) {
                 const question = text.replace(/хеликс|helix/gi, '').trim();
-                // В группах отвечаем только если есть вопрос, в ЛС - всегда
                 if (!question && !isPrivate) return;
 
                 const answer = await getAIResponse(question || "Привет", user.first_name);
@@ -472,7 +471,6 @@ const processUpdate = async (update) => {
                     message_thread_id: threadId !== 'general' ? threadId : undefined
                 });
 
-                // Важно: Сохраняем AI статистику как массив объектов
                 const currentHistory = Array.isArray(state.aiStats.history) ? state.aiStats.history : [];
                 const newHistory = [{ query: question || "Привет", response: answer, time: Date.now() }, ...currentHistory].slice(0, 100);
                 

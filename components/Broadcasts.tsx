@@ -1,7 +1,9 @@
+
 import React, { useState } from 'react';
 import { Icons } from './Icons';
-import { User, BotConfig, InlineButton } from '../types';
+import { User, BotConfig, InlineButton, Message } from '../types';
 import { apiCall } from '../services/api';
+import { saveData } from '../services/firebase';
 
 interface BroadcastsProps {
     users: Record<string, User>;
@@ -16,11 +18,12 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
     const [buttons, setButtons] = useState<InlineButton[]>([]);
     const [btnDraft, setBtnDraft] = useState({ text: '', url: '' });
     
-    // Audience & Progress
-    const [filterRole, setFilterRole] = useState<'all' | 'admin' | 'user'>('all');
+    // Audience Selection
+    const [excludedIds, setExcludedIds] = useState<Set<number>>(new Set());
     const [isSending, setIsSending] = useState(false);
     const [progress, setProgress] = useState({ sent: 0, total: 0, failed: 0 });
     const [logs, setLogs] = useState<string[]>([]);
+    const [filterSearch, setFilterSearch] = useState('');
 
     const handleAddButton = () => {
         if (!btnDraft.text) return;
@@ -28,14 +31,29 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
         setBtnDraft({ text: '', url: '' });
     };
 
-    const targetUsers = (Object.values(users) as User[]).filter((u: User) => {
-        if (u.status === 'banned') return false;
-        if (filterRole === 'all') return true;
-        return u.role === filterRole;
-    });
+    const toggleExclude = (id: number) => {
+        const newSet = new Set(excludedIds);
+        if (newSet.has(id)) newSet.delete(id);
+        else newSet.add(id);
+        setExcludedIds(newSet);
+    };
+
+    // Filter valid users (not banned)
+    const validUsers = (Object.values(users) as User[])
+        .filter(u => u.status !== 'banned')
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+    // Displayed users (filtered by search)
+    const displayedUsers = validUsers.filter(u => 
+        u.name.toLowerCase().includes(filterSearch.toLowerCase()) || 
+        String(u.id).includes(filterSearch)
+    );
+
+    // Target users for broadcast (not excluded)
+    const targetUsers = validUsers.filter(u => !excludedIds.has(u.id));
 
     const startBroadcast = async () => {
-        if (targetUsers.length === 0) return;
+        if (targetUsers.length === 0) { alert('Нет получателей'); return; }
         if (!text && !mediaFile) { alert('Добавьте текст или медиа'); return; }
         
         setIsSending(true);
@@ -43,7 +61,7 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
         setProgress({ sent: 0, total: targetUsers.length, failed: 0 });
         if (addLog) addLog('Рассылка', `Старт рассылки (${targetUsers.length} получателей)`, 'warning');
 
-        // FIX: Ensure mutual exclusivity of fields
+        // Prepare Markup Correctly
         const markup = buttons.length > 0 ? JSON.stringify({ 
             inline_keyboard: buttons.map(b => {
                 let url = b.url;
@@ -68,12 +86,36 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
                     if (markup) fd.append('reply_markup', markup);
                     res = await apiCall(method, fd, config, true);
                 } else {
-                    res = await apiCall('sendMessage', { chat_id: user.id, text, reply_markup: markup ? JSON.parse(markup) : undefined }, config);
+                    res = await apiCall('sendMessage', { 
+                        chat_id: user.id, 
+                        text, 
+                        reply_markup: markup ? JSON.parse(markup) : undefined 
+                    }, config);
                 }
 
                 if (res.ok) {
                     setProgress(p => ({ ...p, sent: p.sent + 1 }));
-                    // SYNC WITH CRM
+                    
+                    // --- SYNC WITH CRM HISTORY ---
+                    // Create message object
+                    const newMsg: Message = {
+                        dir: 'out',
+                        text: text,
+                        type: msgType,
+                        mediaUrl: previewUrl,
+                        buttons: buttons,
+                        time: new Date().toLocaleTimeString('ru-RU'),
+                        timestamp: Date.now(),
+                        isGroup: false,
+                        user: 'Admin (Рассылка)'
+                    };
+                    
+                    // Update Firebase History for this user
+                    const currentHistory = user.history || [];
+                    const updatedHistory = [...currentHistory, newMsg].slice(-50);
+                    // Use saveData to push directly to Firebase
+                    saveData(`users/${user.id}/history`, updatedHistory);
+
                     if (onBroadcastSent) {
                         onBroadcastSent(user.id, text, msgType, previewUrl);
                     }
@@ -146,29 +188,47 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
 
             {/* Right: Settings & Preview */}
             <div className="w-1/2 flex flex-col gap-6">
-                {/* Audience Card */}
-                <div className="bg-[#121214] border border-gray-800 rounded-2xl p-6 shadow-xl">
-                    <h3 className="text-sm font-bold text-gray-400 uppercase mb-4 flex items-center gap-2"><Icons.Users size={16}/> Получатели</h3>
-                    <div className="flex gap-2 mb-4">
-                        {['all', 'user', 'admin'].map(r => (
-                            <button 
-                                key={r} 
-                                onClick={() => setFilterRole(r as any)} 
-                                className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${filterRole === r ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/30' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
-                            >
-                                {r === 'all' ? 'Все' : r === 'user' ? 'Юзеры' : 'Админы'}
-                            </button>
-                        ))}
+                {/* Audience List */}
+                <div className="bg-[#121214] border border-gray-800 rounded-2xl flex flex-col flex-1 shadow-xl overflow-hidden">
+                    <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/50">
+                        <h3 className="text-sm font-bold text-gray-400 uppercase flex items-center gap-2"><Icons.Users size={16}/> Получатели ({targetUsers.length})</h3>
+                        <div className="flex gap-2 text-xs">
+                             <button onClick={() => setExcludedIds(new Set())} className="text-blue-400 hover:underline">Выбрать всех</button>
+                             <button onClick={() => {
+                                 const all = new Set(validUsers.map(u => u.id));
+                                 setExcludedIds(all);
+                             }} className="text-gray-500 hover:underline">Снять всех</button>
+                        </div>
                     </div>
-                    <div className="flex justify-between items-center bg-black/30 p-3 rounded-xl border border-gray-800">
-                        <span className="text-gray-400 text-sm">Найдено пользователей:</span>
-                        <span className="text-xl font-bold text-white">{targetUsers.length}</span>
+                    
+                    <div className="p-3 border-b border-gray-800">
+                        <input value={filterSearch} onChange={e => setFilterSearch(e.target.value)} placeholder="Поиск пользователя..." className="w-full bg-black border border-gray-700 rounded-lg px-3 py-2 text-sm text-white outline-none"/>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                        {displayedUsers.map(u => {
+                            const isChecked = !excludedIds.has(u.id);
+                            return (
+                                <div key={u.id} onClick={() => toggleExclude(u.id)} className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${isChecked ? 'bg-blue-900/20 hover:bg-blue-900/30' : 'bg-gray-900/50 hover:bg-gray-800'}`}>
+                                    <div className="flex items-center gap-3">
+                                        <div className={`w-4 h-4 rounded border flex items-center justify-center ${isChecked ? 'bg-blue-600 border-blue-600' : 'border-gray-600'}`}>
+                                            {isChecked && <Icons.Check size={10} className="text-white"/>}
+                                        </div>
+                                        <div>
+                                            <div className="text-sm text-white font-medium">{u.name}</div>
+                                            <div className="text-xs text-gray-500">ID: {u.id} • {u.role === 'admin' ? 'Админ' : 'Юзер'}</div>
+                                        </div>
+                                    </div>
+                                    {u.role === 'admin' && <Icons.Shield size={12} className="text-yellow-500"/>}
+                                </div>
+                            );
+                        })}
                     </div>
                 </div>
 
-                {/* Progress Card */}
+                {/* Send / Progress */}
                 {isSending || progress.total > 0 ? (
-                    <div className="flex-1 bg-[#121214] border border-gray-800 rounded-2xl p-6 shadow-xl flex flex-col">
+                    <div className="h-48 bg-[#121214] border border-gray-800 rounded-2xl p-6 shadow-xl flex flex-col">
                         <h3 className="text-sm font-bold text-gray-400 uppercase mb-4">Статус выполнения</h3>
                         <div className="mb-4">
                             <div className="h-2 w-full bg-gray-800 rounded-full overflow-hidden">
@@ -184,15 +244,13 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
                         </div>
                     </div>
                 ) : (
-                    <div className="flex-1 flex flex-col justify-end">
-                        <button 
-                            disabled={targetUsers.length === 0}
-                            onClick={startBroadcast}
-                            className={`w-full py-4 rounded-2xl font-bold text-lg shadow-xl transition-all flex items-center justify-center gap-3 ${targetUsers.length === 0 ? 'bg-gray-800 text-gray-600 cursor-not-allowed' : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white hover:scale-[1.02]'}`}
-                        >
-                            <Icons.Send size={22}/> Запустить рассылку
-                        </button>
-                    </div>
+                    <button 
+                        disabled={targetUsers.length === 0}
+                        onClick={startBroadcast}
+                        className={`w-full py-4 rounded-2xl font-bold text-lg shadow-xl transition-all flex items-center justify-center gap-3 h-20 ${targetUsers.length === 0 ? 'bg-gray-800 text-gray-600 cursor-not-allowed' : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white hover:scale-[1.02]'}`}
+                    >
+                        <Icons.Send size={22}/> Запустить рассылку
+                    </button>
                 )}
             </div>
         </div>

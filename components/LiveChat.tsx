@@ -35,32 +35,24 @@ const LiveChat: React.FC<LiveChatProps> = ({
     setQuickReplies
 }) => {
     const [text, setText] = useState('');
-    const [mediaUrl, setMediaUrl] = useState('');
     const [mediaFile, setMediaFile] = useState<File | null>(null);
     const [buttons, setButtons] = useState<InlineButton[]>([]);
     const [btnDraft, setBtnDraft] = useState({ text: '', url: '' });
     const [showTools, setShowTools] = useState(false);
-    
-    // Quick Replies state
-    const [showQuickReplies, setShowQuickReplies] = useState(false);
-    const [newQrTitle, setNewQrTitle] = useState('');
-    const [newQrText, setNewQrText] = useState('');
     
     // Rename state
     const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
     const [editName, setEditName] = useState('');
 
     const send = () => {
-        if (!text.trim() && !mediaUrl && !mediaFile) return;
+        if (!text.trim() && !mediaFile) return;
         onSendMessage({
             text,
-            mediaUrl,
             mediaFile,
             buttons,
             topicId: activeTopic // PASS TOPIC ID
         });
         setText('');
-        setMediaUrl('');
         setMediaFile(null);
         setButtons([]);
         setShowTools(false);
@@ -92,32 +84,34 @@ const LiveChat: React.FC<LiveChatProps> = ({
         }
     };
     
-    const saveQuickReply = () => {
-        if (!newQrTitle || !newQrText || !setQuickReplies) return;
-        setQuickReplies([...quickReplies, { id: Date.now().toString(), title: newQrTitle, text: newQrText }]);
-        setNewQrTitle('');
-        setNewQrText('');
-    };
-
-    const deleteQuickReply = (id: string) => {
-        if (setQuickReplies) setQuickReplies(quickReplies.filter(qr => qr.id !== id));
-    };
+    // Сортировка топиков: General сверху, затем по последнему сообщению
+    const sortedTopics = Object.keys(topicNames).sort((a, b) => {
+        if (a === 'general') return -1;
+        if (b === 'general') return 1;
+        const histA = topicHistory[a] || [];
+        const histB = topicHistory[b] || [];
+        const timeA = histA.length > 0 ? (histA[histA.length-1].timestamp || 0) : 0;
+        const timeB = histB.length > 0 ? (histB[histB.length-1].timestamp || 0) : 0;
+        return timeB - timeA;
+    });
 
     return (
         <div className="flex gap-4 h-[calc(100vh-100px)]">
             {/* Sidebar: Topics */}
             <div className="w-1/4 bg-gray-800/30 border border-gray-700 rounded-xl overflow-hidden flex flex-col">
                 <div className="p-4 border-b border-gray-700 bg-gray-900/50">
-                    <h3 className="font-bold text-gray-400 text-xs uppercase">Чаты / Топики</h3>
+                    <h3 className="font-bold text-gray-400 text-xs uppercase flex items-center gap-2">
+                        <Icons.Hash size={14}/> Темы сообщества
+                    </h3>
                 </div>
-                <div className="flex-1 overflow-y-auto p-2 space-y-1">
-                    {Object.keys(topicNames).map(tid => (
+                <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                    {sortedTopics.map(tid => (
                         <div 
                             key={tid} 
                             className={`group w-full flex items-center justify-between p-3 rounded-lg text-sm transition-colors cursor-pointer ${activeTopic === tid ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' : 'hover:bg-gray-800 text-gray-300'}`} 
                             onClick={() => setActiveTopic(tid)}
                         >
-                            <div className="flex-1 mr-2 flex items-center">
+                            <div className="flex-1 mr-2 flex items-center overflow-hidden">
                                 {editingTopicId === tid ? (
                                     <input 
                                         autoFocus
@@ -245,8 +239,35 @@ const LiveChat: React.FC<LiveChatProps> = ({
 
                 {/* Input Area */}
                 <div className="p-3 bg-gray-900/90 border-t border-gray-700 z-10 relative">
-                    {/* Quick Replies and Tools omitted for brevity, logic handled */}
+                    {/* Tools */}
+                    {showTools && (
+                        <div className="mb-2 p-2 bg-gray-800 rounded-lg animate-slideIn">
+                            <div className="flex items-center gap-2 mb-2">
+                                <label className="flex items-center gap-2 bg-black border border-gray-600 px-3 py-1.5 rounded text-xs text-white cursor-pointer hover:border-blue-500">
+                                    <Icons.Upload size={14}/>
+                                    {mediaFile ? mediaFile.name : 'Прикрепить фото/видео'}
+                                    <input type="file" onChange={e => setMediaFile(e.target.files ? e.target.files[0] : null)} className="hidden"/>
+                                </label>
+                                {mediaFile && <button onClick={() => setMediaFile(null)} className="text-red-400 hover:text-red-300"><Icons.X size={16}/></button>}
+                            </div>
+                            <div className="flex gap-2">
+                                <input value={btnDraft.text} onChange={e => setBtnDraft({...btnDraft, text: e.target.value})} placeholder="Кнопка" className="w-1/3 bg-black border border-gray-600 rounded px-2 py-1 text-xs text-white"/>
+                                <input value={btnDraft.url} onChange={e => setBtnDraft({...btnDraft, url: e.target.value})} placeholder="URL" className="flex-1 bg-black border border-gray-600 rounded px-2 py-1 text-xs text-white"/>
+                                <button onClick={addBtn} className="bg-blue-600 px-2 rounded text-white"><Icons.Plus size={14}/></button>
+                            </div>
+                            <div className="flex flex-wrap gap-2 mt-2">
+                                {buttons.map((b, i) => (
+                                    <div key={i} className="bg-blue-900/30 text-blue-200 px-2 py-0.5 rounded text-xs border border-blue-500/30 flex items-center gap-1">
+                                        {b.text} <button onClick={() => setButtons(buttons.filter((_, idx) => idx !== i))}><Icons.X size={10}/></button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                     <div className="flex gap-2 items-end">
+                        <button onClick={() => setShowTools(!showTools)} className={`p-2.5 rounded-lg transition-colors h-[42px] w-[42px] flex items-center justify-center ${showTools ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
+                            <Icons.Plus size={20}/>
+                        </button>
                          <div className="flex-1 relative">
                             <textarea 
                                 value={text} 
