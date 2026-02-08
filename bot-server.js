@@ -36,7 +36,7 @@ let state = {
 let lastUpdateId = 0;
 const processedUpdates = new Set();
 
-console.log("🔥 [SERVER] Запуск сервера Helix (v2.1 Stable)...");
+console.log("🔥 [SERVER] Запуск сервера Helix (v2.2 Fix)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -64,8 +64,8 @@ sync('aiStats', 'aiStats');
 sync('disabledAiTopics', 'disabledAiTopics', true);
 
 onValue(ref(db, 'status/active'), (snap) => {
-    // Если null/undefined -> считаем true (включен)
     const val = snap.val();
+    // Если значения нет, считаем что включен. Иначе берем значение.
     state.isBotActive = val !== false; 
     console.log(`[STATUS] Режим ответа: ${state.isBotActive ? '✅ АКТИВЕН' : '⏸ НА ПАУЗЕ'}`);
 });
@@ -106,8 +106,8 @@ const updateUserHistory = async (user, message) => {
         const userId = user.id;
         const userPath = `users/${userId}`;
         
-        // Получаем текущего юзера или создаем нового
-        // ВАЖНО: username: user.username || '' - защищает от краша
+        // ПОЛУЧЕНИЕ ИЛИ СОЗДАНИЕ ЮЗЕРА
+        // !!! FIX: Добавлена проверка || '' для username, чтобы не падало !!!
         let currentUser = state.users[userId] || {
             id: userId,
             name: user.first_name || 'Unknown',
@@ -118,27 +118,29 @@ const updateUserHistory = async (user, message) => {
             joinDate: new Date().toLocaleDateString(),
             history: [],
             msgCount: 0,
-            dailyMsgCount: 0
+            dailyMsgCount: 0,
+            unreadCount: 0
         };
 
-        // Обновляем данные (вдруг сменил имя)
+        // Обновляем актуальные данные
         currentUser.name = user.first_name || currentUser.name;
-        currentUser.username = user.username || ''; 
+        currentUser.username = user.username || ''; // Защита от undefined
         currentUser.lastSeen = new Date().toLocaleTimeString('ru-RU');
         currentUser.lastActiveDate = new Date().toLocaleDateString();
         currentUser.msgCount = (currentUser.msgCount || 0) + 1;
         currentUser.dailyMsgCount = (currentUser.dailyMsgCount || 0) + 1;
-        // Ставим флаг, что есть непрочитанное (для сайта)
         currentUser.unreadCount = (currentUser.unreadCount || 0) + 1;
 
-        // История
+        // История сообщений
         const history = Array.isArray(currentUser.history) ? currentUser.history : [];
         const newHistory = [...history, message].slice(-50); 
         currentUser.history = newHistory;
 
-        // Пишем в базу
+        // Сохраняем в Firebase
         await set(ref(db, userPath), currentUser);
-        state.users[userId] = currentUser; // Обновляем локально сразу
+        
+        // Обновляем локальный стейт, чтобы не ждать ответа от базы
+        state.users[userId] = currentUser;
         
     } catch (e) {
         console.error("[CRM ERROR] Save failed:", e);
@@ -150,11 +152,11 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
         const tId = topicId || 'general';
         const path = `topicHistory/${tId}`;
         
-        // Авто-регистрация новой темы
+        // Авто-регистрация нового топика, если его нет в списке
         if (!state.topicNames[tId] && tId !== 'general') {
             const newName = topicNameRaw || `Topic ${tId}`;
             await update(ref(db, 'topicNames'), { [tId]: newName });
-            console.log(`[TOPIC] Зарегистрирован новый топик: ${newName} (${tId})`);
+            console.log(`[TOPIC] Обнаружен новый топик: ${newName}`);
         }
 
         const snapshot = await get(ref(db, path));
@@ -175,6 +177,7 @@ const getAIResponse = async (question, userName) => {
     
     if (!openaiApiKey) return "⚠️ AI не настроен.";
 
+    // Формируем контекст базы знаний
     const context = state.knowledgeBase.map(k => `[${k.category}] ${k.title}: ${k.response}`).join('\n');
 
     let persona = "Ты — Хеликс, полезный помощник.";
@@ -182,19 +185,20 @@ const getAIResponse = async (question, userName) => {
     else if (aiPersonality === 'joker') persona = "Ты шутник.";
     else if (aiPersonality === 'official') persona = "Ты официальный бот.";
 
-    // Умный промпт: разделяет болтовню и факты
+    // !!! НОВЫЙ ПРОМПТ: Разделяет болтовню и факты !!!
     const systemPrompt = `
     ROLE: ${persona}
     USER: ${userName}
     
     INSTRUCTIONS:
-    1. SMALL TALK: Если юзер пишет "Привет", "Как дела", "Кто ты" - отвечай свободно, коротко и дружелюбно (или в стиле личности). БАЗУ НЕ ИСПОЛЬЗУЙ.
+    1. SMALL TALK: Если пользователь просто здоровается ("Привет", "Ку", "Как дела?", "Ты тут?"), ответь ему вежливо и в своем стиле. НЕ ИСПОЛЬЗУЙ БАЗУ ЗНАНИЙ для этого. Просто поддержи разговор.
     
-    2. FACTS: Если вопрос про игру, клан, правила, ивенты - ИСПОЛЬЗУЙ ТОЛЬКО CONTEXT НИЖЕ.
+    2. KNOWLEDGE BASE QUESTIONS: Если пользователь задает вопрос по игре, клану, правилам или фактам - ИСПОЛЬЗУЙ ТОЛЬКО CONTEXT НИЖЕ.
+       
        CONTEXT:
        ${context}
        
-    3. UNKNOWN: Если это вопрос про факты, но в CONTEXT пусто - ответь: "В моей базе знаний нет информации об этом." (Не выдумывай!).
+    3. UNKNOWN INFO: Если это вопрос по фактам, но ответа НЕТ в CONTEXT, ответь: "К сожалению, у меня нет информации об этом в базе знаний." (Или в своем стиле). НЕ ВЫДУМЫВАЙ ФАКТЫ.
     `;
 
     try {
@@ -207,7 +211,7 @@ const getAIResponse = async (question, userName) => {
                     { role: "system", content: systemPrompt },
                     { role: "user", content: question }
                 ],
-                temperature: 0.6,
+                temperature: 0.6, // Баланс между творчеством и точностью
                 max_tokens: 800
             })
         });
@@ -215,7 +219,7 @@ const getAIResponse = async (question, userName) => {
         return data.choices?.[0]?.message?.content || "Ошибка генерации.";
     } catch (e) {
         console.error("AI Error:", e);
-        return "Ошибка AI.";
+        return "Ошибка соединения с AI.";
     }
 };
 
@@ -232,8 +236,6 @@ const processUpdate = async (update) => {
     const isPrivate = msg.chat.type === 'private';
     const isTargetChat = String(chatId) === state.config.targetChatId;
     const threadId = msg.message_thread_id ? String(msg.message_thread_id) : 'general';
-    
-    // Пытаемся угадать название топика, если это первое сообщение
     const topicNameGuess = msg.reply_to_message?.forum_topic_created?.name || null;
 
     // 1. ЛОГИРУЕМ ВСЕГДА (Даже если бот на паузе)
@@ -246,6 +248,7 @@ const processUpdate = async (update) => {
         user: user.first_name 
     };
 
+    // Сохраняем пользователя и сообщение (CRM и LiveChat)
     await updateUserHistory(user, logMsg);
     if (isTargetChat) {
         await updateTopicHistory(threadId, { ...logMsg, isIncoming: true }, topicNameGuess);
@@ -253,18 +256,19 @@ const processUpdate = async (update) => {
 
     if (user.is_bot) return;
 
-    // Если бот на паузе - дальше не идем (не отвечаем)
-    // Исключение: Команды админов или ЛС (если настроено)
-    // Но по запросу - "отключить работу в ЛС" тоже проверяем
+    // ПРОВЕРКА СТАТУСА: Если бот на паузе - мы не отвечаем (return)
+    // Исключение: Можно добавить логику для команд админа, но пока отключаем все
     if (!state.isBotActive) return;
+
+    // Если ЛС отключены в конфиге
     if (isPrivate && !state.config.enablePM) return;
 
 
-    // 2. ПРОВЕРКА КОМАНД
+    // 2. ОБРАБОТКА КОМАНД
     const lowerText = text.toLowerCase();
     let commandHandled = false;
 
-    // Сортируем команды: сначала точные совпадения, потом частичные
+    // Сортировка команд (Exact match first)
     const sortedCommands = [...state.commands].sort((a, b) => {
         if (a.matchType === 'exact') return -1;
         return 1;
@@ -279,7 +283,7 @@ const processUpdate = async (update) => {
         else if (cmd.matchType === 'contains' && lowerText.includes(trig)) match = true;
 
         if (match) {
-            // Проверка прав и топика
+            // Проверки прав и топиков
             if (cmd.allowedTopicId === 'private_only' && !isPrivate) continue;
             if (cmd.allowedTopicId && cmd.allowedTopicId !== 'private_only' && cmd.allowedTopicId !== threadId && !isPrivate) continue;
 
@@ -304,21 +308,23 @@ const processUpdate = async (update) => {
                 }, null);
             }
             commandHandled = true;
-            break; // Выполняем только одну команду
+            break; 
         }
     }
 
-    // 3. AI
+    // 3. AI ОТВЕТЫ
     if (!commandHandled && state.config.enableAI) {
+        // Триггеры: упоминание имени или ЛС
         const isMention = lowerText.includes('хеликс') || lowerText.includes('helix') || (isPrivate && state.config.enablePM);
         const isDisabled = state.disabledAiTopics.includes(threadId);
 
         if (isMention && !isDisabled) {
             const question = text.replace(/хеликс|helix/gi, '').trim();
             
-            // Если просто написали "Хеликс" без текста - игнор (кроме ЛС)
+            // Если просто написали имя без вопроса - игнор (кроме ЛС)
             if (!question && !isPrivate) return;
 
+            // Вызываем умный AI
             const answer = await getAIResponse(question || "Привет", user.first_name);
             
             await sendMessage(chatId, answer, { 
@@ -326,10 +332,11 @@ const processUpdate = async (update) => {
                 message_thread_id: threadId !== 'general' ? threadId : undefined
             });
 
-            // Статистика и лог
+            // Статистика
             const newHistory = [{ query: question || "Привет", response: answer, time: Date.now() }, ...state.aiStats.history].slice(0, 100);
             await set(ref(db, 'aiStats'), { total: state.aiStats.total + 1, history: newHistory });
 
+            // Лог ответа
             if (isTargetChat) {
                 await updateTopicHistory(threadId, {
                     user: 'Bot',
@@ -344,7 +351,7 @@ const processUpdate = async (update) => {
 };
 
 // ==========================================
-// 7. КАЛЕНДАРЬ
+// 7. КАЛЕНДАРЬ И СОБЫТИЯ
 // ==========================================
 const checkCalendar = async () => {
     if (!state.config.enableCalendarAlerts || !state.isBotActive) return;
@@ -383,19 +390,20 @@ const checkCalendar = async () => {
 };
 
 // ==========================================
-// 8. ЗАПУСК
+// 8. ГЛАВНЫЙ ЦИКЛ (POLLING)
 // ==========================================
 const startLoop = async () => {
-    // Heartbeat каждую минуту
+    // Heartbeat для сайта (чтобы не показывал VPS OFF)
     setInterval(() => {
         set(ref(db, 'status/heartbeat'), Date.now());
         checkCalendar();
     }, 60000);
 
-    // Long Polling
+    // Бесконечный цикл получения сообщений
     while (true) {
         if (state.config.token) {
             try {
+                // Long polling на 30 секунд
                 const updates = await apiCall('getUpdates', { offset: lastUpdateId + 1, timeout: 30 });
                 if (updates && updates.ok && updates.result.length > 0) {
                     for (const u of updates.result) {

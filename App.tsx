@@ -159,7 +159,7 @@ const App = () => {
         const newState = !isBotActive;
         setIsBotActive(newState);
         saveData('status/active', newState);
-        addLog('Система', newState ? 'Бот переведен в АКТИВНЫЙ режим' : 'Бот поставлен на ПАУЗУ', 'warning');
+        addLog('Система', newState ? 'Бот переведен в АКТИВНЫЙ режим' : 'Бот поставлен на ПАУЗУ (Тихий режим)', 'warning');
     };
 
     const addLog = (action: string, details: string, type: 'info' | 'warning' | 'danger' | 'success' = 'info') => {
@@ -224,7 +224,7 @@ const App = () => {
                         </div>
                         <div>
                             <h1 className="text-xl font-bold text-white tracking-tight">Бот Helix</h1>
-                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v2.0</span>
+                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v2.2</span>
                         </div>
                     </div>
                     
@@ -274,7 +274,7 @@ const App = () => {
                         </span>
                     </button>
                     <div className="text-[9px] text-center text-gray-600 mt-2">
-                        {isBotActive ? 'Бот отвечает пользователям' : 'Бот читает, но молчит'}
+                        {isBotActive ? 'Бот отвечает пользователям' : 'Бот молчит (только логи)'}
                     </div>
                 </div>
             </div>
