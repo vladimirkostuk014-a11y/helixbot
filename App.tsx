@@ -30,7 +30,7 @@ const toArray = <T,>(data: any): T[] => {
 
 const App = () => {
     const [activeTab, setActiveTab] = useState('dashboard');
-    const [isBotActive, setIsBotActive] = useState(false); // Статус с сервера
+    const [isBotActive, setIsBotActive] = useState(true); 
     const [lastHeartbeat, setLastHeartbeat] = useState(0);
     const [loadedSections, setLoadedSections] = useState<Set<string>>(new Set());
     
@@ -91,14 +91,13 @@ const App = () => {
             markLoaded('config'); 
         });
         
-        // Monitoring Bot Heartbeat (Updated by server every 10s)
         sub('status/heartbeat', (val) => {
             if (val) setLastHeartbeat(val);
         });
         
-        // Bot Control Switch
         sub('status/active', (val) => {
-            setIsBotActive(!!val);
+            // Если в базе явно false, то false. Если undefined или true, то true.
+            setIsBotActive(val !== false);
         });
 
         // 2. Data
@@ -145,7 +144,6 @@ const App = () => {
     }, []);
 
     // --- AUTO-SAVE (Front -> Firebase) ---
-    // User changes settings -> Firebase -> VPS reads it
     useEffect(() => { if (canSave('config')) saveData('config', config); }, [config, loadedSections]);
     useEffect(() => { if (canSave('users')) saveData('users', users); }, [users, loadedSections]);
     useEffect(() => { if (canSave('groups')) saveData('groups', groups); }, [groups, loadedSections]);
@@ -156,15 +154,12 @@ const App = () => {
     useEffect(() => { if (canSave('disabledAiTopics')) saveData('disabledAiTopics', disabledAiTopics); }, [disabledAiTopics, loadedSections]);
     useEffect(() => { if (canSave('quickReplies')) saveData('quickReplies', quickReplies); }, [quickReplies, loadedSections]);
     
-    // Note: We DO NOT save aiStats or topicHistory from here usually, as the bot writes them. 
-    // Except if we want to clear them.
-    
     // --- ACTIONS ---
-    const toggleBot = () => {
+    const toggleBotStatus = () => {
         const newState = !isBotActive;
         setIsBotActive(newState);
         saveData('status/active', newState);
-        addLog('Система', newState ? 'Команда запуска отправлена на сервер' : 'Команда остановки отправлена на сервер', 'info');
+        addLog('Система', newState ? 'Бот переведен в АКТИВНЫЙ режим' : 'Бот поставлен на ПАУЗУ', 'warning');
     };
 
     const addLog = (action: string, details: string, type: 'info' | 'warning' | 'danger' | 'success' = 'info') => {
@@ -177,7 +172,6 @@ const App = () => {
     const clearAiHistory = () => {
         saveData('aiStats', { total: 0, history: [] }); 
         saveData('topicHistory', {});
-        // Also clear user history locally and save
         const clearedUsers = { ...users };
         Object.keys(clearedUsers).forEach(key => {
             clearedUsers[key] = { ...clearedUsers[key], history: [], msgCount: 0, dailyMsgCount: 0 };
@@ -205,8 +199,8 @@ const App = () => {
         addLog('Группы', `Группа ${groupId} удалена`, 'danger');
     };
 
-    // Calculate Uptime based on heartbeat
-    const isOnline = (Date.now() - lastHeartbeat) < 30000; // Online if heartbeat within 30s
+    // Calculate Uptime
+    const isOnline = (Date.now() - lastHeartbeat) < 90000; // VPS Online if heartbeat < 90s
 
     const TabButton = ({ id, iconKey, label, badge }: any) => {
         const isActive = activeTab === id; const Icon = Icons[iconKey as keyof typeof Icons];
@@ -230,19 +224,29 @@ const App = () => {
                         </div>
                         <div>
                             <h1 className="text-xl font-bold text-white tracking-tight">Бот Helix</h1>
-                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель</span>
+                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v2.0</span>
                         </div>
                     </div>
-                    <div className="flex items-center justify-between bg-black/30 rounded-lg p-2 border border-gray-800/50 mt-4">
-                        <div className="flex items-center gap-2">
-                             <div className={`w-2 h-2 rounded-full ${isOnline && isBotActive ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-                             <span className="text-[10px] font-mono text-gray-400">{isOnline && isBotActive ? 'VPS ONLINE' : 'VPS OFF'}</span>
+                    
+                    {/* Status Box */}
+                    <div className="bg-black/40 rounded-lg p-3 border border-gray-800/50 mt-4 space-y-2">
+                        <div className="flex items-center justify-between">
+                             <span className="text-[10px] text-gray-500 uppercase font-bold">Сервер (VPS)</span>
+                             <div className="flex items-center gap-1.5">
+                                 <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`}></div>
+                                 <span className={`text-[10px] font-bold ${isOnline ? 'text-green-400' : 'text-red-400'}`}>{isOnline ? 'ОНЛАЙН' : 'ОФФЛАЙН'}</span>
+                             </div>
+                        </div>
+                        <div className="flex items-center justify-between">
+                             <span className="text-[10px] text-gray-500 uppercase font-bold">Режим ответа</span>
+                             <span className={`text-[10px] font-bold px-1.5 rounded ${isBotActive ? 'bg-blue-900/30 text-blue-400' : 'bg-gray-800 text-gray-400'}`}>
+                                {isBotActive ? 'АКТИВЕН' : 'ПАУЗА'}
+                             </span>
                         </div>
                     </div>
                 </div>
                 
                 <div className="px-4 space-y-2 flex-1 overflow-y-auto custom-scrollbar pb-4">
-                    <div className="text-[10px] uppercase font-bold text-gray-600 px-4 mb-2 mt-2">Управление</div>
                     <TabButton id="dashboard" iconKey="Activity" label="Обзор" />
                     <TabButton id="livechat" iconKey="MessageCircle" label="Live Chat" />
                     <TabButton id="users" iconKey="Users" label="CRM Пользователи" />
@@ -257,11 +261,21 @@ const App = () => {
                 </div>
 
                 <div className="p-4 border-t border-gray-800/50 bg-[#0c0c0e]">
-                    <button onClick={toggleBot} className={`w-full py-3 rounded-xl text-xs font-bold uppercase transition-all duration-300 shadow-lg ${isBotActive ? 'bg-gray-800 text-red-400 hover:bg-red-900/20 border border-transparent' : 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white hover:from-emerald-400 hover:to-teal-400'}`}>
+                    <button 
+                        onClick={toggleBotStatus} 
+                        className={`w-full py-3 rounded-xl text-xs font-bold uppercase transition-all duration-300 shadow-lg border ${
+                            isBotActive 
+                            ? 'bg-gray-800 text-yellow-500 border-yellow-500/20 hover:bg-yellow-900/10' 
+                            : 'bg-green-600 text-white border-green-500 hover:bg-green-500'
+                        }`}
+                    >
                         <span className="flex items-center justify-center gap-2">
-                            {isBotActive ? <><Icons.Pause size={14}/> Остановить VPS</> : <><Icons.Play size={14}/> Запустить VPS</>}
+                            {isBotActive ? <><Icons.Pause size={14}/> Поставить на Паузу</> : <><Icons.Play size={14}/> Активировать Бота</>}
                         </span>
                     </button>
+                    <div className="text-[9px] text-center text-gray-600 mt-2">
+                        {isBotActive ? 'Бот отвечает пользователям' : 'Бот читает, но молчит'}
+                    </div>
                 </div>
             </div>
 
@@ -269,7 +283,7 @@ const App = () => {
                 <div className="flex-1 overflow-auto p-8 scroll-smooth custom-scrollbar">
                     <div className="max-w-[95%] mx-auto h-full">
                         {activeTab === 'dashboard' && <Dashboard users={users} groups={groups} setGroups={setGroups} aiStats={aiStats} config={config} setConfig={setConfig} isAiThinking={false} setAiStats={setAiStats} addLog={addLog} setActiveTab={setActiveTab} onStopBot={() => setIsBotActive(false)} onClearAiStats={clearAiHistory} viewMode="overview" auditLogs={auditLogs} onDeleteGroup={handleDeleteGroup} />}
-                        {activeTab === 'livechat' && <LiveChat topicNames={topicNames} topicHistory={topicHistory} activeTopic={activeTopic} setActiveTopic={setActiveTopic} disabledAiTopics={disabledAiTopics} onToggleAi={(tid) => { const list = disabledAiTopics.includes(tid) ? disabledAiTopics.filter(t => t !== tid) : [...disabledAiTopics, tid]; setDisabledAiTopics(list); saveData('disabledAiTopics', list); }} onClearTopic={(tid) => { const h = {...topicHistory, [tid]: []}; setTopicHistory(h); saveData('topicHistory', h); }} onRenameTopic={(id, name) => { const n = {...topicNames, [id]: name}; setTopicNames(n); saveData('topicNames', n); }} unreadCounts={{}} quickReplies={quickReplies} setQuickReplies={(qr) => { setQuickReplies(qr); saveData('quickReplies', qr); }} onSendMessage={(data) => { /* Only for UI preview in this mode, real sending needs API from frontend if implemented or just let admin use telegram */ }} />}
+                        {activeTab === 'livechat' && <LiveChat topicNames={topicNames} topicHistory={topicHistory} activeTopic={activeTopic} setActiveTopic={setActiveTopic} disabledAiTopics={disabledAiTopics} onToggleAi={(tid) => { const list = disabledAiTopics.includes(tid) ? disabledAiTopics.filter(t => t !== tid) : [...disabledAiTopics, tid]; setDisabledAiTopics(list); saveData('disabledAiTopics', list); }} onClearTopic={(tid) => { const h = {...topicHistory, [tid]: []}; setTopicHistory(h); saveData('topicHistory', h); }} onRenameTopic={(id, name) => { const n = {...topicNames, [id]: name}; setTopicNames(n); saveData('topicNames', n); }} unreadCounts={{}} quickReplies={quickReplies} setQuickReplies={(qr) => { setQuickReplies(qr); saveData('quickReplies', qr); }} onSendMessage={(data) => { /* UI preview only */ }} />}
                         {activeTab === 'users' && <UserCRM users={users} setUsers={setUsers} config={config} commands={commands} topicNames={topicNames} addLog={addLog} />}
                         {activeTab === 'broadcasts' && <Broadcasts users={users} config={config} addLog={addLog} onBroadcastSent={(uid, txt, type, url) => { /* Update user history manually here if needed */ }} />}
                         {activeTab === 'calendar' && <CalendarEvents events={calendarEvents} setEvents={handleCalendarUpdate} categories={calendarCategories} setCategories={(c) => { setCalendarCategories(c); saveData('calendarCategories', c); }} topicNames={topicNames} addLog={addLog} config={config} />}

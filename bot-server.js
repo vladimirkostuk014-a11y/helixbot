@@ -1,11 +1,11 @@
 
-// bot-server.js
-// === ЗАГРУЗИТЕ ЭТОТ ФАЙЛ НА ВАШ VPS ===
-
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, onValue, set, update, get } from "firebase/database";
+import fetch from 'node-fetch';
 
-// --- 1. FIREBASE CONFIG ---
+// ==========================================
+// 1. КОНФИГУРАЦИЯ
+// ==========================================
 const firebaseConfig = {
   apiKey: "AIzaSyAMs9_3wy03yA1bYL4zXTAAIKBxPRWqA_E",
   authDomain: "helixbotdb.firebaseapp.com",
@@ -19,299 +19,382 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-// --- 2. GLOBAL STATE ---
-let config = {};
-let users = {};
-let groups = {};
-let commands = [];
-let knowledgeBase = [];
-let aiStats = { total: 0, history: [] };
-let topicNames = {};
-let topicHistory = {};
-let calendarEvents = [];
-let disabledAiTopics = [];
-let isBotActive = false;
+// Глобальное состояние
+let state = {
+    config: {},
+    users: {},
+    groups: {},
+    commands: [],
+    knowledgeBase: [],
+    calendarEvents: [],
+    topicNames: {},
+    aiStats: { total: 0, history: [] },
+    disabledAiTopics: [],
+    isBotActive: true 
+};
 
 let lastUpdateId = 0;
-let processedUpdates = new Set();
+const processedUpdates = new Set();
 
-console.log("🔥 [SERVER] Starting Helix Bot Server...");
+console.log("🔥 [SERVER] Запуск сервера Helix (v2.1 Stable)...");
 
-// --- 3. SYNC WITH FIREBASE (Downloader) ---
-const sub = (path, cb) => onValue(ref(db, path), (snap) => cb(snap.val()));
+// ==========================================
+// 2. СИНХРОНИЗАЦИЯ С FIREBASE
+// ==========================================
+const sync = (path, key, isArray = false) => {
+    onValue(ref(db, path), (snapshot) => {
+        const val = snapshot.val();
+        if (isArray) {
+            state[key] = val ? Object.values(val) : [];
+        } else {
+            state[key] = val || (key === 'config' ? {} : {});
+        }
+        if (key === 'config') console.log(`[CONFIG] Токен загружен: ...${state.config.token?.slice(-5)}`);
+    });
+};
 
-sub('config', (val) => { if(val) config = val; });
-sub('status/active', (val) => { 
-    isBotActive = !!val; 
-    console.log(`[STATUS] Bot is now ${isBotActive ? 'ACTIVE' : 'PAUSED'}`);
+sync('config', 'config');
+sync('users', 'users');
+sync('groups', 'groups');
+sync('commands', 'commands', true);
+sync('knowledgeBase', 'knowledgeBase', true);
+sync('calendarEvents', 'calendarEvents', true);
+sync('topicNames', 'topicNames');
+sync('aiStats', 'aiStats');
+sync('disabledAiTopics', 'disabledAiTopics', true);
+
+onValue(ref(db, 'status/active'), (snap) => {
+    // Если null/undefined -> считаем true (включен)
+    const val = snap.val();
+    state.isBotActive = val !== false; 
+    console.log(`[STATUS] Режим ответа: ${state.isBotActive ? '✅ АКТИВЕН' : '⏸ НА ПАУЗЕ'}`);
 });
-sub('users', (val) => { users = val || {}; });
-sub('groups', (val) => { groups = val || {}; });
-sub('commands', (val) => { commands = val ? Object.values(val) : []; });
-sub('knowledgeBase', (val) => { knowledgeBase = val ? Object.values(val) : []; });
-sub('aiStats', (val) => { aiStats = val || { total: 0, history: [] }; });
-sub('topicNames', (val) => { topicNames = val || {}; });
-sub('topicHistory', (val) => { 
-    if(val) {
-        // Convert to array if needed, keep synced
-        topicHistory = val;
-    } else topicHistory = {};
-});
-sub('calendarEvents', (val) => { calendarEvents = val ? Object.values(val) : []; });
-sub('disabledAiTopics', (val) => { disabledAiTopics = val ? Object.values(val) : []; });
 
-// --- 4. TELEGRAM API HELPERS ---
+// ==========================================
+// 3. API TELEGRAM
+// ==========================================
 const apiCall = async (method, body) => {
-    if (!config.token) return;
+    if (!state.config.token) return;
     try {
-        const response = await fetch(`https://api.telegram.org/bot${config.token}/${method}`, {
+        const response = await fetch(`https://api.telegram.org/bot${state.config.token}/${method}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
         });
-        return await response.json();
+        const data = await response.json();
+        return data;
     } catch (e) {
-        console.error(`[API ERROR] ${method}:`, e.message);
+        console.error(`[NETWORK ERROR] ${method}:`, e.message);
     }
 };
 
-const sendResponse = async (chatId, text, replyTo = null, threadId = null, buttons = null) => {
-    const payload = {
+const sendMessage = async (chatId, text, options = {}) => {
+    return await apiCall('sendMessage', {
         chat_id: chatId,
         text: text,
-        parse_mode: 'HTML'
-    };
-    if (replyTo) payload.reply_to_message_id = replyTo;
-    if (threadId && threadId !== 'general') payload.message_thread_id = threadId;
-    if (buttons && buttons.length > 0) {
-        payload.reply_markup = {
-            inline_keyboard: buttons.map(b => [{ text: b.text, url: b.url.startsWith('http') ? b.url : `https://${b.url}` }])
+        parse_mode: 'HTML',
+        ...options
+    });
+};
+
+// ==========================================
+// 4. ЛОГИКА СОХРАНЕНИЯ (CRM & CHAT)
+// ==========================================
+
+const updateUserHistory = async (user, message) => {
+    try {
+        const userId = user.id;
+        const userPath = `users/${userId}`;
+        
+        // Получаем текущего юзера или создаем нового
+        // ВАЖНО: username: user.username || '' - защищает от краша
+        let currentUser = state.users[userId] || {
+            id: userId,
+            name: user.first_name || 'Unknown',
+            username: user.username || '', 
+            role: state.config.adminIds?.includes(String(userId)) ? 'admin' : 'user',
+            status: 'active',
+            warnings: 0,
+            joinDate: new Date().toLocaleDateString(),
+            history: [],
+            msgCount: 0,
+            dailyMsgCount: 0
         };
+
+        // Обновляем данные (вдруг сменил имя)
+        currentUser.name = user.first_name || currentUser.name;
+        currentUser.username = user.username || ''; 
+        currentUser.lastSeen = new Date().toLocaleTimeString('ru-RU');
+        currentUser.lastActiveDate = new Date().toLocaleDateString();
+        currentUser.msgCount = (currentUser.msgCount || 0) + 1;
+        currentUser.dailyMsgCount = (currentUser.dailyMsgCount || 0) + 1;
+        // Ставим флаг, что есть непрочитанное (для сайта)
+        currentUser.unreadCount = (currentUser.unreadCount || 0) + 1;
+
+        // История
+        const history = Array.isArray(currentUser.history) ? currentUser.history : [];
+        const newHistory = [...history, message].slice(-50); 
+        currentUser.history = newHistory;
+
+        // Пишем в базу
+        await set(ref(db, userPath), currentUser);
+        state.users[userId] = currentUser; // Обновляем локально сразу
+        
+    } catch (e) {
+        console.error("[CRM ERROR] Save failed:", e);
     }
-    return await apiCall('sendMessage', payload);
 };
 
-// --- 5. DATA SAVERS (Uploader) ---
-// Save message to User History (CRM)
-const saveUserMsg = async (userObj, msg) => {
-    const userId = userObj.id;
-    const history = users[userId]?.history || [];
-    // Limit history to 100
-    const newHistory = [...history, msg].slice(-100);
-    
-    const updates = {
-        ...userObj,
-        history: newHistory,
-        msgCount: (userObj.msgCount || 0) + 1,
-        dailyMsgCount: (userObj.dailyMsgCount || 0) + 1,
-        lastSeen: new Date().toLocaleTimeString('ru-RU'),
-        lastActiveDate: new Date().toLocaleDateString()
-    };
-    
-    // Optimistic update local
-    users[userId] = updates; 
-    // Async save
-    await set(ref(db, `users/${userId}`), updates);
+const updateTopicHistory = async (topicId, message, topicNameRaw) => {
+    try {
+        const tId = topicId || 'general';
+        const path = `topicHistory/${tId}`;
+        
+        // Авто-регистрация новой темы
+        if (!state.topicNames[tId] && tId !== 'general') {
+            const newName = topicNameRaw || `Topic ${tId}`;
+            await update(ref(db, 'topicNames'), { [tId]: newName });
+            console.log(`[TOPIC] Зарегистрирован новый топик: ${newName} (${tId})`);
+        }
+
+        const snapshot = await get(ref(db, path));
+        const currentHistory = snapshot.val() || [];
+        const updatedHistory = [...(Array.isArray(currentHistory) ? currentHistory : []), message].slice(-50);
+        
+        await set(ref(db, path), updatedHistory);
+    } catch (e) {
+        console.error("[TOPIC ERROR] Save failed:", e);
+    }
 };
 
-// Save message to Topic History (Live Chat)
-const saveTopicMsg = async (threadId, msg) => {
-    const tId = threadId || 'general';
-    const history = topicHistory[tId] ? (Array.isArray(topicHistory[tId]) ? topicHistory[tId] : Object.values(topicHistory[tId])) : [];
-    const newHistory = [...history, msg].slice(-100);
+// ==========================================
+// 5. МОЗГ AI (УМНЫЙ РЕЖИМ)
+// ==========================================
+const getAIResponse = async (question, userName) => {
+    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity } = state.config;
     
-    topicHistory[tId] = newHistory;
-    await set(ref(db, `topicHistory/${tId}`), newHistory);
-};
+    if (!openaiApiKey) return "⚠️ AI не настроен.";
 
-// --- 6. AI LOGIC (Full Power) ---
-const getAIResponse = async (question) => {
-    if (!config.openaiApiKey) return "AI не настроен.";
-    
-    const context = knowledgeBase.map(k => `[${k.category}] ${k.title}: ${k.response}`).join('\n');
-    
-    // Personality Logic
-    let tone = "Ты — Хеликс, полезный помощник.";
-    let style = "Отвечай кратко.";
-    let refuse = "Информации нет.";
-    
-    if (config.aiProfanity) {
-        tone = "Ты дерзкий мужик, материшься (18+), но помогаешь.";
-        refuse = "Бля, нет такой инфы.";
-    } else if (config.aiPersonality === 'joker') {
-        tone = "Ты шутник, отвечай с юмором.";
-    } // ... add other personalities if needed, keeping it simple for now
+    const context = state.knowledgeBase.map(k => `[${k.category}] ${k.title}: ${k.response}`).join('\n');
 
+    let persona = "Ты — Хеликс, полезный помощник.";
+    if (aiProfanity) persona = "Ты дерзкий, используешь мат (18+), но по делу.";
+    else if (aiPersonality === 'joker') persona = "Ты шутник.";
+    else if (aiPersonality === 'official') persona = "Ты официальный бот.";
+
+    // Умный промпт: разделяет болтовню и факты
     const systemPrompt = `
-    ROLE: ${tone}
-    TASK: Отвечай на вопрос, используя ТОЛЬКО контекст ниже.
-    CONTEXT:
-    ${context}
+    ROLE: ${persona}
+    USER: ${userName}
     
-    RULES:
-    1. Если нет информации в контексте, ответь: "${refuse}". НЕ ВЫДУМЫВАЙ.
-    2. ${style}
+    INSTRUCTIONS:
+    1. SMALL TALK: Если юзер пишет "Привет", "Как дела", "Кто ты" - отвечай свободно, коротко и дружелюбно (или в стиле личности). БАЗУ НЕ ИСПОЛЬЗУЙ.
+    
+    2. FACTS: Если вопрос про игру, клан, правила, ивенты - ИСПОЛЬЗУЙ ТОЛЬКО CONTEXT НИЖЕ.
+       CONTEXT:
+       ${context}
+       
+    3. UNKNOWN: Если это вопрос про факты, но в CONTEXT пусто - ответь: "В моей базе знаний нет информации об этом." (Не выдумывай!).
     `;
 
     try {
-        const res = await fetch(`${config.aiBaseUrl}/chat/completions`, {
+        const response = await fetch(`${aiBaseUrl || 'https://api.groq.com/openai/v1'}/chat/completions`, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${config.openaiApiKey}`
-            },
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${openaiApiKey}` },
             body: JSON.stringify({
-                model: config.aiModel,
+                model: aiModel || "llama-3.3-70b-versatile",
                 messages: [
                     { role: "system", content: systemPrompt },
                     { role: "user", content: question }
                 ],
-                temperature: config.aiTemperature,
-                max_tokens: config.aiMaxTokens
+                temperature: 0.6,
+                max_tokens: 800
             })
         });
-        const data = await res.json();
-        return data.choices?.[0]?.message?.content || "Ошибка AI";
+        const data = await response.json();
+        return data.choices?.[0]?.message?.content || "Ошибка генерации.";
     } catch (e) {
-        return "Ошибка соединения с AI";
+        console.error("AI Error:", e);
+        return "Ошибка AI.";
     }
 };
 
-// --- 7. MAIN PROCESS UPDATE ---
+// ==========================================
+// 6. ОБРАБОТКА СООБЩЕНИЙ
+// ==========================================
 const processUpdate = async (update) => {
     const msg = update.message;
-    if (!msg) return;
+    if (!msg || !msg.text) return; 
 
     const chatId = msg.chat.id;
-    const text = (msg.text || msg.caption || '').trim();
+    const text = msg.text.trim();
     const user = msg.from;
-    if (user.is_bot) return;
-
     const isPrivate = msg.chat.type === 'private';
-    const isTargetChat = String(chatId) === config.targetChatId;
+    const isTargetChat = String(chatId) === state.config.targetChatId;
     const threadId = msg.message_thread_id ? String(msg.message_thread_id) : 'general';
-
-    // 1. Save User to CRM
-    const userObj = users[user.id] || { 
-        id: user.id, name: user.first_name, username: user.username, 
-        role: (config.adminIds.includes(String(user.id)) ? 'admin' : 'user'),
-        status: 'active', warnings: 0, joinDate: new Date().toLocaleDateString()
-    };
     
-    const userMsg = { 
-        dir: 'in', text: text || '[Media]', type: msg.photo ? 'photo' : 'text', 
-        time: new Date().toLocaleTimeString('ru-RU'), isGroup: !isPrivate 
-    };
-    saveUserMsg(userObj, userMsg);
+    // Пытаемся угадать название топика, если это первое сообщение
+    const topicNameGuess = msg.reply_to_message?.forum_topic_created?.name || null;
 
-    // 2. Save to Live Chat (if target chat)
+    // 1. ЛОГИРУЕМ ВСЕГДА (Даже если бот на паузе)
+    const logMsg = {
+        dir: 'in',
+        text: text,
+        type: 'text',
+        time: new Date().toLocaleTimeString('ru-RU'),
+        isGroup: !isPrivate,
+        user: user.first_name 
+    };
+
+    await updateUserHistory(user, logMsg);
     if (isTargetChat) {
-        const topicMsg = { 
-            user: user.first_name, text: text || '[Media]', time: new Date().toLocaleTimeString('ru-RU'), 
-            isIncoming: true, type: msg.photo ? 'photo' : 'text' 
-        };
-        saveTopicMsg(threadId, topicMsg);
+        await updateTopicHistory(threadId, { ...logMsg, isIncoming: true }, topicNameGuess);
     }
 
-    // 3. Check Commands
-    let commandExecuted = false;
+    if (user.is_bot) return;
+
+    // Если бот на паузе - дальше не идем (не отвечаем)
+    // Исключение: Команды админов или ЛС (если настроено)
+    // Но по запросу - "отключить работу в ЛС" тоже проверяем
+    if (!state.isBotActive) return;
+    if (isPrivate && !state.config.enablePM) return;
+
+
+    // 2. ПРОВЕРКА КОМАНД
     const lowerText = text.toLowerCase();
-    
-    for (const cmd of commands) {
+    let commandHandled = false;
+
+    // Сортируем команды: сначала точные совпадения, потом частичные
+    const sortedCommands = [...state.commands].sort((a, b) => {
+        if (a.matchType === 'exact') return -1;
+        return 1;
+    });
+
+    for (const cmd of sortedCommands) {
         let match = false;
-        if (cmd.matchType === 'exact' && lowerText === cmd.trigger.toLowerCase()) match = true;
-        if (cmd.matchType === 'start' && lowerText.startsWith(cmd.trigger.toLowerCase())) match = true;
-        if (cmd.matchType === 'contains' && lowerText.includes(cmd.trigger.toLowerCase())) match = true;
+        const trig = cmd.trigger.toLowerCase();
+
+        if (cmd.matchType === 'exact' && lowerText === trig) match = true;
+        else if (cmd.matchType === 'start' && lowerText.startsWith(trig)) match = true;
+        else if (cmd.matchType === 'contains' && lowerText.includes(trig)) match = true;
 
         if (match) {
-            // Check Topic/Scope
+            // Проверка прав и топика
             if (cmd.allowedTopicId === 'private_only' && !isPrivate) continue;
             if (cmd.allowedTopicId && cmd.allowedTopicId !== 'private_only' && cmd.allowedTopicId !== threadId && !isPrivate) continue;
 
-            await sendResponse(chatId, cmd.response, msg.message_id, threadId, cmd.buttons);
-            
-            // Log outbound msg
-            if (isTargetChat) saveTopicMsg(threadId, { user: 'Bot', text: cmd.response, time: new Date().toLocaleTimeString('ru-RU'), isIncoming: false, type: 'text' });
-            commandExecuted = true;
-            break;
+            const targetThread = (cmd.isSystem && cmd.notificationTopicId) ? cmd.notificationTopicId : threadId;
+            const replyMarkup = cmd.buttons && cmd.buttons.length > 0 ? {
+                inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }])
+            } : undefined;
+
+            await sendMessage(chatId, cmd.response, { 
+                message_thread_id: targetThread !== 'general' ? targetThread : undefined,
+                reply_markup: replyMarkup
+            });
+
+            // Лог ответа
+            if (isTargetChat) {
+                await updateTopicHistory(targetThread, {
+                    user: 'Bot',
+                    text: cmd.response,
+                    isIncoming: false,
+                    time: new Date().toLocaleTimeString('ru-RU'),
+                    type: 'text'
+                }, null);
+            }
+            commandHandled = true;
+            break; // Выполняем только одну команду
         }
     }
 
-    // 4. AI Handling
-    if (!commandExecuted && config.enableAI) {
-        const isMention = lowerText.includes('хеликс') || lowerText.includes('helix') || (isPrivate && config.enablePM);
-        const isDisabled = disabledAiTopics.includes(threadId);
+    // 3. AI
+    if (!commandHandled && state.config.enableAI) {
+        const isMention = lowerText.includes('хеликс') || lowerText.includes('helix') || (isPrivate && state.config.enablePM);
+        const isDisabled = state.disabledAiTopics.includes(threadId);
 
         if (isMention && !isDisabled) {
             const question = text.replace(/хеликс|helix/gi, '').trim();
-            const answer = await getAIResponse(question);
             
-            await sendResponse(chatId, answer, msg.message_id, threadId);
-            
-            // Save Stats
-            const newStat = { query: question, response: answer, time: Date.now() };
-            const newAiHistory = [newStat, ...(aiStats.history || [])].slice(0, 100);
-            await set(ref(db, 'aiStats'), { total: (aiStats.total || 0) + 1, history: newAiHistory });
+            // Если просто написали "Хеликс" без текста - игнор (кроме ЛС)
+            if (!question && !isPrivate) return;
 
-            // Log outbound
-            if (isTargetChat) saveTopicMsg(threadId, { user: 'Bot', text: answer, time: new Date().toLocaleTimeString('ru-RU'), isIncoming: false, type: 'text' });
+            const answer = await getAIResponse(question || "Привет", user.first_name);
+            
+            await sendMessage(chatId, answer, { 
+                reply_to_message_id: msg.message_id,
+                message_thread_id: threadId !== 'general' ? threadId : undefined
+            });
+
+            // Статистика и лог
+            const newHistory = [{ query: question || "Привет", response: answer, time: Date.now() }, ...state.aiStats.history].slice(0, 100);
+            await set(ref(db, 'aiStats'), { total: state.aiStats.total + 1, history: newHistory });
+
+            if (isTargetChat) {
+                await updateTopicHistory(threadId, {
+                    user: 'Bot',
+                    text: answer,
+                    isIncoming: false,
+                    time: new Date().toLocaleTimeString('ru-RU'),
+                    type: 'text'
+                }, null);
+            }
         }
     }
 };
 
-// --- 8. CALENDAR CHECKER (1 min loop) ---
-// Fixes "Triple Message" bug by checking if already sent
+// ==========================================
+// 7. КАЛЕНДАРЬ
+// ==========================================
 const checkCalendar = async () => {
-    if (!config.enableCalendarAlerts) return;
-    
+    if (!state.config.enableCalendarAlerts || !state.isBotActive) return;
+
     const now = new Date();
-    const currentHour = now.getHours().toString().padStart(2, '0');
-    const currentMinute = now.getMinutes().toString().padStart(2, '0');
-    const timeStr = `${currentHour}:${currentMinute}`;
     const dateStr = now.toISOString().split('T')[0];
+    const timeStr = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 
-    const updatedEvents = [];
-    let hasChanges = false;
-
-    for (const event of calendarEvents) {
+    let updatesNeeded = false;
+    const updatedEvents = state.calendarEvents.map(event => {
         const notifyDate = event.notifyDate || event.startDate;
         const notifyTime = event.notifyTime || '09:00';
 
-        // Check if time matches AND not already sent today
         if (notifyDate === dateStr && notifyTime === timeStr && !event.sent) {
-            const msg = `⚡️ <b>${event.title}</b>\n\n📅 <b>Даты:</b> ${event.startDate} — ${event.endDate}\n📂 ${event.category}\n\n${event.description}`;
-            
-            await sendResponse(config.targetChatId, msg, null, event.topicId !== 'general' ? event.topicId : null, event.buttons);
-            console.log(`[CALENDAR] Sent event: ${event.title}`);
-            
-            // MARK AS SENT
-            updatedEvents.push({ ...event, sent: true });
-            hasChanges = true;
-        } else {
-            // Reset 'sent' flag if date passed (for recurring logic if needed, but for now simple)
-            // Or simply keep it. Here we just keep existing state.
-            updatedEvents.push(event);
-        }
-    }
+            const msg = `⚡️ <b>${event.title}</b>\n\n📅 <b>Даты:</b> ${event.startDate} — ${event.endDate}\n📂 ${event.category}\n\n${event.description || ''}`;
+            const replyMarkup = event.buttons?.length > 0 ? {
+                inline_keyboard: event.buttons.map(b => [{ text: b.text, url: b.url }])
+            } : undefined;
 
-    if (hasChanges) {
+            const targetThread = event.topicId && event.topicId !== 'general' ? event.topicId : null;
+
+            sendMessage(state.config.targetChatId, msg, {
+                message_thread_id: targetThread,
+                reply_markup: replyMarkup
+            });
+
+            updatesNeeded = true;
+            return { ...event, sent: true }; 
+        }
+        return event;
+    });
+
+    if (updatesNeeded) {
         await set(ref(db, 'calendarEvents'), updatedEvents);
     }
 };
 
-// --- 9. SERVER LOOP ---
-const startServer = async () => {
+// ==========================================
+// 8. ЗАПУСК
+// ==========================================
+const startLoop = async () => {
+    // Heartbeat каждую минуту
     setInterval(() => {
-        // Heartbeat for frontend
         set(ref(db, 'status/heartbeat'), Date.now());
-        
-        // Calendar check
-        if (isBotActive) checkCalendar();
-    }, 60000); // Every minute
+        checkCalendar();
+    }, 60000);
 
-    // Polling Loop
+    // Long Polling
     while (true) {
-        if (isBotActive && config.token) {
+        if (state.config.token) {
             try {
                 const updates = await apiCall('getUpdates', { offset: lastUpdateId + 1, timeout: 30 });
                 if (updates && updates.ok && updates.result.length > 0) {
@@ -322,19 +405,16 @@ const startServer = async () => {
                             await processUpdate(u);
                         }
                     }
-                    // Clean processed set
-                    if (processedUpdates.size > 2000) processedUpdates.clear();
+                    if (processedUpdates.size > 5000) processedUpdates.clear();
                 }
             } catch (e) {
-                console.error("Polling error", e);
+                console.error("Polling error (retry 5s):", e.message);
                 await new Promise(r => setTimeout(r, 5000));
             }
         } else {
-            // Wait if bot paused
             await new Promise(r => setTimeout(r, 2000));
         }
     }
 };
 
-// Wait for initial config load
-setTimeout(startServer, 3000);
+setTimeout(startLoop, 3000);

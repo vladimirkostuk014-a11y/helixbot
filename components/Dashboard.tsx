@@ -41,7 +41,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     const [isPlaygroundThinking, setIsPlaygroundThinking] = useState(false);
     const playgroundEndRef = useRef<HTMLDivElement>(null);
 
-    // UI state for inline confirmation inside modal
     const [showAiClearConfirm, setShowAiClearConfirm] = useState(false);
     
     const userArray: User[] = Object.values(users);
@@ -53,11 +52,10 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         }
     }, [playgroundHistory, showPlayground, isPlaygroundThinking]);
 
-    // Calculates REAL activity for the CURRENT CALENDAR MONTH
     const getActivityData = () => {
         const today = new Date();
         const year = today.getFullYear();
-        const month = today.getMonth(); // 0-indexed
+        const month = today.getMonth(); 
         const lastDayOfMonth = new Date(year, month + 1, 0).getDate();
         const dataMap = new Map<string, { date: string, messages: number, ai: number }>();
 
@@ -75,7 +73,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         userArray.forEach(user => {
             if (user.history) {
                 user.history.forEach(msg => {
-                    // STRICT FILTER: Only count messages from Groups (Chat)
                     if (msg.timestamp && isCurrentMonth(msg.timestamp) && msg.isGroup) {
                         const d = new Date(msg.timestamp);
                         const dateStr = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
@@ -107,17 +104,13 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     };
 
     const handleSave = (section: 'ai' | 'ban') => {
+        // Just force update state to trigger firebase save in App.tsx
         setConfig({...config}); 
         
-        // Stop bot on save
-        if (onStopBot) {
-            onStopBot();
-        }
-
-        if (section === 'ai') setAiSaveStatus('Сохранено! (Бот остановлен)');
-        else setBanSaveStatus('Сохранено! (Бот остановлен)');
+        if (section === 'ai') setAiSaveStatus('Сохранено!');
+        else setBanSaveStatus('Сохранено!');
         
-        if (addLog) addLog('Настройки', `Обновлены настройки ${section === 'ai' ? 'AI' : 'Бан-лист'} (Перезапустите бота)`, 'warning');
+        if (addLog) addLog('Настройки', `Обновлены настройки ${section === 'ai' ? 'AI' : 'Бан-лист'}`, 'info');
         
         setTimeout(() => {
             if (section === 'ai') setAiSaveStatus('');
@@ -137,7 +130,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         if (!setGroups || !newGroupId.trim()) return;
         const id = newGroupId.trim();
         setGroups(prev => {
-            if (prev[id]) return prev; // Already exists
+            if (prev[id]) return prev; 
             return {
                 ...prev,
                 [id]: {
@@ -189,7 +182,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     };
 
     const handleClearChart = () => {
-        // Immediate clear without confirmation as requested
         if (onClearAiStats) onClearAiStats();
     };
 
@@ -213,7 +205,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         </div>
     );
 
-    // --- RENDER FOR SETTINGS MODE ---
     if (viewMode === 'settings') {
         return (
             <div className="space-y-6">
@@ -222,7 +213,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     
                     <div className="flex justify-between items-start mb-5 relative z-10">
                             <h3 className="font-bold text-lg text-white flex items-center gap-2"><Icons.Sparkles className="text-purple-400"/> AI Настройки (Helix)</h3>
-                            {/* Status Indicator */}
                             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border backdrop-blur-sm ${config.enableAI ? 'bg-green-500/10 border-green-500/30 text-green-400' : 'bg-red-500/10 border-red-500/30 text-red-400'}`}>
                                 <div className={`w-2 h-2 rounded-full ${config.enableAI ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
                                 <span className="text-xs font-bold tracking-wider">{config.enableAI ? 'РАБОТАЕТ' : 'ОТКЛЮЧЕН'}</span>
@@ -296,7 +286,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                             </div>
                         </div>
                         
-                        {/* AI Terminal / Logs */}
                         <div className="bg-black/40 rounded-xl border border-gray-800 p-3 font-mono text-xs text-gray-400 h-28 overflow-hidden relative">
                             <div className="absolute top-2 right-2 flex gap-1">
                                 <div className="w-2 h-2 rounded-full bg-gray-600"></div>
@@ -343,7 +332,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </button>
                 </div>
 
-                {/* AI Playground Modal - FIXED POSITIONING */}
                 {showPlayground && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowPlayground(false)}>
                         <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl animate-slideIn flex flex-col h-[600px]" onClick={e => e.stopPropagation()}>
@@ -414,11 +402,9 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         );
     }
 
-    // --- RENDER FOR OVERVIEW MODE ---
     return (
         <div className="space-y-8 relative">
             
-            {/* Groups Modal */}
             {showGroupModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowGroupModal(false)}>
                     <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-4xl shadow-2xl animate-slideIn p-6" onClick={e => e.stopPropagation()}>
@@ -464,7 +450,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                 </div>
             )}
 
-            {/* Active Users Modal */}
             {showActiveModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowActiveModal(false)}>
                     <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-4xl shadow-2xl animate-slideIn p-6" onClick={e => e.stopPropagation()}>
@@ -493,7 +478,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                 </div>
             )}
 
-            {/* AI Stats Modal - Remains for detail view */}
             {showAiModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => { setShowAiModal(false); setShowAiClearConfirm(false); }}>
                     <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-5xl shadow-2xl animate-slideIn p-6" onClick={e => e.stopPropagation()}>
@@ -548,7 +532,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                 </div>
             )}
 
-            {/* KPI Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 <KpiCard 
                     icon={Icons.Users} title="Всего пользователей" 
@@ -578,10 +561,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                 />
             </div>
 
-            {/* Main Content Area */}
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
                 
-                {/* Main Activity Chart */}
                 <div className="xl:col-span-2 bg-[#121214] p-6 rounded-2xl border border-gray-800 shadow-xl">
                     <div className="flex items-center justify-between mb-6">
                         <h3 className="text-lg font-bold text-white flex items-center gap-2">
@@ -625,7 +606,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                 </div>
 
-                {/* Info Panel & Logs */}
                 <div className="bg-[#121214] rounded-2xl border border-gray-800 shadow-xl flex flex-col h-full overflow-hidden">
                     <div className="p-6 border-b border-gray-800 text-center bg-gradient-to-b from-gray-900 to-[#121214]">
                         <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3 text-white transition-all duration-500 ${isAiThinking ? 'bg-purple-600 shadow-[0_0_20px_rgba(147,51,234,0.5)] scale-110' : 'bg-gray-800'}`}>
