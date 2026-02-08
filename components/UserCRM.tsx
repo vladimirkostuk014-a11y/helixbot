@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Icons } from './Icons';
 import { User, BotConfig, InlineButton, Command } from '../types';
 import { apiCall } from '../services/api';
+import { saveData } from '../services/firebase';
 
 interface UserCRMProps {
     users: Record<string, User>;
@@ -34,6 +35,8 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
     useEffect(() => {
         if (selectedUser && selectedUser.unreadCount) {
              setUsers(prev => ({ ...prev, [selectedUser.id]: { ...prev[selectedUser.id], unreadCount: 0 } }));
+             // Persist read status
+             saveData(`users/${selectedUser.id}/unreadCount`, 0);
         }
     }, [selectedUserId]);
 
@@ -58,16 +61,20 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
     const handleRoleChange = (role: 'admin' | 'user') => {
         if (!selectedUserId) return;
         setUsers(prev => ({ ...prev, [selectedUserId]: { ...prev[selectedUserId], role } }));
+        saveData(`users/${selectedUserId}/role`, role);
         if (addLog) addLog('Роль', `Пользователь ${selectedUser?.name} теперь ${role}`, 'warning');
     };
 
     const handleClearHistory = () => {
         if (!selectedUserId) return;
         if (window.confirm('Вы уверены, что хотите очистить переписку с этим пользователем?')) {
+            // Update Local
             setUsers(prev => ({
                 ...prev,
                 [selectedUserId]: { ...prev[selectedUserId], history: [] }
             }));
+            // Update Firebase
+            saveData(`users/${selectedUserId}/history`, []);
             if (addLog) addLog('CRM', `Очищена история с ${selectedUser?.name}`, 'info');
         }
     };
@@ -104,7 +111,10 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
         const until = minutes === 0 ? 0 : Math.floor(Date.now() / 1000) + (minutes * 60);
         const perms = { can_send_messages: false };
         await apiCall('restrictChatMember', { chat_id: config.targetChatId, user_id: selectedUserId, permissions: JSON.stringify(perms), until_date: until }, config);
+        
         setUsers(prev => ({ ...prev, [selectedUserId]: { ...prev[selectedUserId], status: 'muted' } }));
+        saveData(`users/${selectedUserId}/status`, 'muted');
+        
         if (addLog) addLog('Мут', `Выдан мут пользователю ${selectedUser?.name} (${minutes === 0 ? 'навсегда' : minutes + 'мин'})`, 'danger');
     };
 
@@ -112,7 +122,10 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
         if (!selectedUserId) return;
         const perms = { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true };
         await apiCall('restrictChatMember', { chat_id: config.targetChatId, user_id: selectedUserId, permissions: JSON.stringify(perms) }, config);
+        
         setUsers(prev => ({ ...prev, [selectedUserId]: { ...prev[selectedUserId], status: 'active' } }));
+        saveData(`users/${selectedUserId}/status`, 'active');
+
         if (addLog) addLog('Снятие мута', `Снят мут с ${selectedUser?.name}`, 'success');
     };
 
@@ -121,10 +134,12 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
         if (selectedUser.status === 'banned') {
             await apiCall('unbanChatMember', { chat_id: config.targetChatId, user_id: selectedUserId, only_if_banned: true }, config);
             setUsers(prev => ({ ...prev, [selectedUserId]: { ...prev[selectedUserId], status: 'active' } }));
+            saveData(`users/${selectedUserId}/status`, 'active');
             if (addLog) addLog('Разбан', `Разбанен ${selectedUser.name}`, 'success');
         } else {
             await apiCall('banChatMember', { chat_id: config.targetChatId, user_id: selectedUserId }, config);
             setUsers(prev => ({ ...prev, [selectedUserId]: { ...prev[selectedUserId], status: 'banned' } }));
+            saveData(`users/${selectedUserId}/status`, 'banned');
             if (addLog) addLog('Бан', `Забанен ${selectedUser.name}`, 'danger');
         }
     };
@@ -136,6 +151,7 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
         const newWarns = Math.max(0, Math.min(3, currentWarns + delta));
         
         setUsers(prev => ({ ...prev, [selectedUserId]: { ...prev[selectedUserId], warnings: newWarns } }));
+        saveData(`users/${selectedUserId}/warnings`, newWarns);
         
         try {
             if (delta > 0) {
@@ -161,6 +177,7 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
             handleMute(2880); // 48h
             await apiCall('sendMessage', { chat_id: config.targetChatId, text: `🛑 @${selectedUser.username || selectedUser.name} получил 3-й варн и заглушен на 48 часов.` }, config);
             setUsers(prev => ({ ...prev, [selectedUserId]: { ...prev[selectedUserId], warnings: 0 } }));
+            saveData(`users/${selectedUserId}/warnings`, 0);
         }
     };
 
@@ -211,7 +228,11 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
                 isGroup: false 
             };
             
-            setUsers(prev => ({ ...prev, [selectedUserId]: { ...prev[selectedUserId], history: [...(prev[selectedUserId].history || []), newMsg as any] } }));
+            const updatedHistory = [...(users[selectedUserId].history || []), newMsg];
+            
+            setUsers(prev => ({ ...prev, [selectedUserId]: { ...prev[selectedUserId], history: updatedHistory as any } }));
+            saveData(`users/${selectedUserId}/history`, updatedHistory);
+
             setMsgText('');
             setMediaFile(null);
             setMediaUrl('');

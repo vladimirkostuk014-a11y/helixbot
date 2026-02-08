@@ -36,7 +36,7 @@ let state = {
 let lastUpdateId = 0;
 const processedUpdates = new Set();
 
-console.log("🔥 [SERVER] Запуск сервера Helix (v2.5 Final Fixes)...");
+console.log("🔥 [SERVER] Запуск сервера Helix (v3.5 Final Patch)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -79,13 +79,10 @@ const apiCall = async (method, body) => {
             body: JSON.stringify(body)
         });
         const data = await response.json();
-        if (!data.ok) {
-            console.error(`[TELEGRAM ERROR] ${method}:`, data.description);
-        }
         return data;
     } catch (e) {
         console.error(`[NETWORK ERROR] ${method}:`, e.message);
-        return { ok: false, description: e.message };
+        return { ok: false };
     }
 };
 
@@ -108,7 +105,7 @@ const restrictUser = async (chatId, userId, permissions, untilDate = 0) => {
         user_id: userId,
         permissions: JSON.stringify(permissions),
         until_date: untilDate,
-        use_independent_chat_permissions: true // Важно для супергрупп
+        use_independent_chat_permissions: true 
     });
 };
 
@@ -116,48 +113,38 @@ const banUser = async (chatId, userId) => {
     return await apiCall('banChatMember', { chat_id: chatId, user_id: userId });
 };
 
-const unbanUser = async (chatId, userId) => {
-    return await apiCall('unbanChatMember', { chat_id: chatId, user_id: userId, only_if_banned: true });
-};
-
 // ==========================================
 // 4. ЛОГИКА СОХРАНЕНИЯ (CRM & CHAT)
 // ==========================================
-
 const updateUserHistory = async (user, message) => {
     try {
         const userId = user.id;
         const userPath = `users/${userId}`;
         
-        let currentUser = state.users[userId] || {
+        // Получаем актуальные данные, чтобы не перезатереть статус
+        const snapshot = await get(ref(db, userPath));
+        const existingUser = snapshot.val() || {};
+
+        let currentUser = {
             id: userId,
             name: user.first_name || 'Unknown',
             username: user.username || '', 
-            role: state.config.adminIds?.includes(String(userId)) ? 'admin' : 'user',
-            status: 'active',
-            warnings: 0,
-            joinDate: new Date().toLocaleDateString(),
-            history: [],
-            msgCount: 0,
-            dailyMsgCount: 0,
-            unreadCount: 0
+            role: state.config.adminIds?.includes(String(userId)) ? 'admin' : (existingUser.role || 'user'),
+            status: existingUser.status || 'active', 
+            warnings: existingUser.warnings || 0,
+            joinDate: existingUser.joinDate || new Date().toLocaleDateString(),
+            history: Array.isArray(existingUser.history) ? existingUser.history : [],
+            msgCount: (existingUser.msgCount || 0) + 1,
+            dailyMsgCount: (existingUser.dailyMsgCount || 0) + 1,
+            unreadCount: (existingUser.unreadCount || 0) + 1,
+            lastSeen: new Date().toLocaleTimeString('ru-RU'),
+            lastActiveDate: new Date().toLocaleDateString()
         };
 
-        currentUser.name = user.first_name || currentUser.name;
-        currentUser.username = user.username || ''; 
-        currentUser.lastSeen = new Date().toLocaleTimeString('ru-RU');
-        currentUser.lastActiveDate = new Date().toLocaleDateString();
-        currentUser.msgCount = (currentUser.msgCount || 0) + 1;
-        currentUser.dailyMsgCount = (currentUser.dailyMsgCount || 0) + 1;
-        currentUser.unreadCount = (currentUser.unreadCount || 0) + 1;
-
-        const history = Array.isArray(currentUser.history) ? currentUser.history : [];
-        const newHistory = [...history, message].slice(-50); 
+        const newHistory = [...currentUser.history, message].slice(-50); 
         currentUser.history = newHistory;
 
         await set(ref(db, userPath), currentUser);
-        // Не обновляем локальный стейт вручную, ждем синхронизации от Firebase, чтобы избежать рассинхрона
-        
     } catch (e) {
         console.error("[CRM ERROR] Save failed:", e);
     }
@@ -169,12 +156,15 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
         const path = `topicHistory/${tId}`;
         
         // Авто-регистрация новой темы
-        if (!state.topicNames[tId] && tId !== 'general') {
-            const newName = topicNameRaw || `Topic ${tId}`;
-            await update(ref(db, 'topicNames'), { [tId]: newName });
-            console.log(`[TOPIC] Registered new topic: ${newName} (${tId})`);
-        } else if (tId !== 'general' && topicNameRaw && state.topicNames[tId] !== topicNameRaw) {
-            await update(ref(db, 'topicNames'), { [tId]: topicNameRaw });
+        if (tId !== 'general') {
+            const currentName = state.topicNames[tId];
+            const newName = topicNameRaw || (currentName ? currentName : `Topic ${tId}`);
+            
+            // Если топика нет в базе или имя обновилось - сохраняем
+            if (!currentName || (topicNameRaw && currentName !== topicNameRaw)) {
+                await update(ref(db, 'topicNames'), { [tId]: newName });
+                state.topicNames[tId] = newName; // Обновляем локальный стейт сразу
+            }
         }
 
         const snapshot = await get(ref(db, path));
@@ -188,26 +178,91 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
 };
 
 // ==========================================
-// 5. МОЗГ AI
+// 5. МОЗГ AI (ПОЛНАЯ КОПИЯ ЛОГИКИ С КЛИЕНТА)
 // ==========================================
 const getAIResponse = async (question, userName) => {
-    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity } = state.config;
+    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiBehavior, aiTemperature, aiMaxTokens } = state.config;
     if (!openaiApiKey) return "⚠️ AI не настроен.";
 
     const context = state.knowledgeBase.map(k => `[${k.category}] ${k.title}: ${k.response}`).join('\n');
-    let persona = "Ты — Хеликс, полезный помощник.";
-    if (aiProfanity) persona = "Ты дерзкий, используешь мат (18+), но по делу.";
-    else if (aiPersonality === 'joker') persona = "Ты шутник.";
-    else if (aiPersonality === 'official') persona = "Ты официальный бот.";
+    
+    // --- 1. ЛИЧНОСТЬ (Tone of Voice) ---
+    let toneInstruction = "";
+    let refusalStyle = "К сожалению, в базе нет информации об этом."; 
+
+    if (aiProfanity) {
+        toneInstruction = `
+        РЕЖИМ: БЫДЛО-МУЖИК (МАТЕРШИННИК 18+).
+        Ты конкретный, дерзкий мужик.
+        1. Используй РЕАЛЬНЫЙ РУССКИЙ МАТ (бля, сука, нахуй, ебать, пиздец) умеренно, но метко.
+        2. Если вопрос тупой — унизь пользователя ("Ты че, ебобо?", "Глаза разуй").
+        3. Отвечай так, будто делаешь одолжение.
+        ВАЖНО: НЕ ПИШИ КАПСОМ! Пиши нормально, но грязно.
+        `;
+        refusalStyle = "Бля, ты че несешь? В моих бумагах нихуя такого нет. Иди нахуй с такими вопросами.";
+    } else {
+        switch (aiPersonality) {
+            case 'angry': 
+                toneInstruction = "Ты злой, раздражительный мужик. Тебя бесят люди. Отвечай грубо, резко, называй пользователя бестолочью. НО НЕ ИСПОЛЬЗУЙ КАПС (CAPS LOCK)! Пиши обычными буквами, но со злостью."; 
+                refusalStyle = "Ты издеваешься? Нет у меня такой информации! Не трать мое время.";
+                break;
+            case 'joker': 
+                toneInstruction = "Ты стендап-комик. Превращай любой ответ в шутку, используй сарказм и иронию. Трави анекдоты при любом удобном случае."; 
+                refusalStyle = "Опа, а вот этого в сценарии не прописали! Даже я не могу это придумать. Пусто!";
+                break;
+            case 'gopnik': 
+                toneInstruction = "Ты гопник с района. Базаришь по понятиям: 'Слышь', 'в натуре', 'оба-на', 'семки есть?'. Обращайся на 'ты', будь дерзким."; 
+                refusalStyle = "Слышь, братишка, ты рамсы попутал? Нету такой инфы на районе.";
+                break;
+            case 'toxic': 
+                toneInstruction = "Ты токсичный геймер/тролль. Унижай интеллект пользователя, называй нубом, пиши 'ez', 'skill issue', 'удали доту'."; 
+                refusalStyle = "Лол, ну ты и нуб. Даже запрос нормально сделать не можешь. Нет данных, удали игру.";
+                break;
+            case 'official': 
+                toneInstruction = "Ты строгий бюрократ. Сухой, официальный стиль. Ссылайся на регламенты и инструкции. Никаких эмоций."; 
+                refusalStyle = "Согласно реестру данных, запрашиваемая информация отсутствует. Запрос отклонен.";
+                break;
+            case 'kind': 
+                toneInstruction = "Ты очень добрый старший брат. Заботливый, вежливый, всегда поддержишь. Обращайся 'дружище' или 'солнышко'."; 
+                refusalStyle = "Извини, дружище, но я перерыл все записи и ничего не нашел :( Попробуй спросить что-то другое.";
+                break;
+            case 'philosopher': 
+                toneInstruction = "Ты философ. Отвечай глубокомысленно, метафорами о бытии, даже на простые вопросы."; 
+                refusalStyle = "Знание — это свет, но сейчас передо мной лишь тьма. В базе нет ответа на твой вопрос.";
+                break;
+            case 'cyberpunk': 
+                toneInstruction = "Ты хакер из будущего. Используй сленг: 'netrunner', 'ICE', 'glitch', 'connect', 'implant'."; 
+                refusalStyle = "Ошибка доступа 404. Данные в нейросети не найдены. Системный сбой.";
+                break;
+            case 'grandma': 
+                toneInstruction = "Ты ворчливый дед (мужчина). Вспоминай 'как было раньше', называй всех 'салагами' или 'внучками'. Жалуйся на спину."; 
+                refusalStyle = "Эх, молодежь... Спрашиваете ерунду всякую. Нет у меня такого в записной книжке!";
+                break;
+            default: // helpful
+                toneInstruction = "Ты — Хеликс, полезный и уверенный помощник-мужчина. Общаешься кратко и по делу, без лишней воды.";
+                refusalStyle = "В моей базе знаний нет информации по этому вопросу.";
+        }
+    }
+
+    // --- 2. СТИЛЬ (Длина и структура) ---
+    let styleInstruction = "Отвечай нормально, 2-3 предложения.";
+    switch (aiBehavior) {
+        case 'concise': styleInstruction = "Отвечай МАКСИМАЛЬНО КОРОТКО. 1 предложение. Как отрезал."; break;
+        case 'detailed': styleInstruction = "Отвечай подробно, расписывай детали, используй списки, если есть что перечислять. Давай развернутый ответ."; break;
+        case 'passive': styleInstruction = "Отвечай лениво, без энтузиазма. Минимум слов. Маленькими буквами. Тебе лень писать."; break;
+        case 'mentor': styleInstruction = "Отвечай поучительно, объясняй суть, как учитель ученику. Проверяй, понял ли пользователь."; break;
+    }
 
     const systemPrompt = `
-    ROLE: ${persona}
+    ROLE: ${toneInstruction}
     USER: ${userName}
+    
     INSTRUCTIONS:
     1. SMALL TALK: Отвечай свободно на приветствия.
     2. FACTS: ИСПОЛЬЗУЙ ТОЛЬКО CONTEXT НИЖЕ.
        CONTEXT: ${context}
-    3. UNKNOWN: Если нет в контексте, скажи что не знаешь.
+    3. UNKNOWN: Если нет в контексте, ты ОБЯЗАН ответить: "${refusalStyle}".
+    4. FORMAT: ${styleInstruction}
     `;
 
     try {
@@ -217,7 +272,8 @@ const getAIResponse = async (question, userName) => {
             body: JSON.stringify({
                 model: aiModel || "llama-3.3-70b-versatile",
                 messages: [{ role: "system", content: systemPrompt }, { role: "user", content: question }],
-                temperature: 0.6, max_tokens: 800
+                temperature: aiTemperature || 0.6, 
+                max_tokens: aiMaxTokens || 800
             })
         });
         const data = await response.json();
@@ -232,7 +288,6 @@ const handleSystemCommand = async (command, msg, targetThread) => {
     const chatId = msg.chat.id;
     const reply = msg.reply_to_message;
     
-    // Если это реплай
     if (reply && reply.from) {
         const targetUser = reply.from;
         const targetName = targetUser.first_name;
@@ -247,12 +302,10 @@ const handleSystemCommand = async (command, msg, targetThread) => {
             await update(ref(db, `users/${targetUser.id}`), { warnings: warns });
             
             if (warns >= 3) {
-                const res = await restrictUser(chatId, targetUser.id, { can_send_messages: false }, Math.floor(Date.now()/1000) + 172800); // 48h
+                const res = await restrictUser(chatId, targetUser.id, { can_send_messages: false }, Math.floor(Date.now()/1000) + 172800);
                 if (res.ok) {
                     await update(ref(db, `users/${targetUser.id}`), { warnings: 0, status: 'muted' });
                     return sendMessage(chatId, `🛑 <b>${targetName}</b> получил 3/3 варнов и заглушен на 48 часов.`, { message_thread_id: targetThread });
-                } else {
-                    return sendMessage(chatId, `⚠️ Ошибка выдачи мута: ${res.description}`, { message_thread_id: targetThread });
                 }
             } else {
                 return sendMessage(chatId, `⚠️ <b>${targetName}</b>, предупреждение (${warns}/3).`, { message_thread_id: targetThread });
@@ -265,8 +318,6 @@ const handleSystemCommand = async (command, msg, targetThread) => {
             if (res.ok) {
                 await update(ref(db, `users/${targetUser.id}`), { status: 'muted' });
                 return sendMessage(chatId, `😶 <b>${targetName}</b> заглушен на 1 час.`, { message_thread_id: targetThread });
-            } else {
-                return sendMessage(chatId, `⚠️ Не удалось заглушить: ${res.description}`, { message_thread_id: targetThread });
             }
         }
 
@@ -276,24 +327,15 @@ const handleSystemCommand = async (command, msg, targetThread) => {
             if (res.ok) {
                 await update(ref(db, `users/${targetUser.id}`), { status: 'banned' });
                 return sendMessage(chatId, `⛔️ <b>${targetName}</b> забанен.`, { message_thread_id: targetThread });
-            } else {
-                return sendMessage(chatId, `⚠️ Не удалось забанить: ${res.description}`, { message_thread_id: targetThread });
             }
         }
         
         // UNMUTE
         if (command === '/unmute') {
-            const res = await restrictUser(chatId, targetUser.id, { 
-                can_send_messages: true, 
-                can_send_media_messages: true, 
-                can_send_other_messages: true,
-                can_add_web_page_previews: true
-            });
+            const res = await restrictUser(chatId, targetUser.id, { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true });
             if (res.ok) {
-                await update(ref(db, `users/${targetUser.id}`), { status: 'active' });
+                await update(ref(db, `users/${targetUser.id}`), { status: 'active', warnings: 0 });
                 return sendMessage(chatId, `✅ <b>${targetName}</b> размучен.`, { message_thread_id: targetThread });
-            } else {
-                return sendMessage(chatId, `⚠️ Ошибка: ${res.description}`, { message_thread_id: targetThread });
             }
         }
     }
@@ -304,26 +346,34 @@ const handleSystemCommand = async (command, msg, targetThread) => {
 // ==========================================
 const processUpdate = async (update) => {
     const msg = update.message;
-    if (!msg || !msg.text) return; 
+    if (!msg) return; 
 
     const chatId = msg.chat.id;
-    const text = msg.text.trim();
+    const text = (msg.text || msg.caption || '').trim();
     const user = msg.from;
     const isPrivate = msg.chat.type === 'private';
     const isTargetChat = String(chatId) === state.config.targetChatId;
     const threadId = msg.message_thread_id ? String(msg.message_thread_id) : 'general';
     const topicNameGuess = msg.reply_to_message?.forum_topic_created?.name || null;
 
-    // 1. ПРОВЕРКА ОТКЛЮЧЕННЫХ ГРУПП (FIXED)
-    // Если группа есть в списке и у неё isDisabled = true, игнорируем всё, кроме команд админа (если нужно, но лучше полный игнор)
-    // Для надежности приводим к строке
-    const groupKey = String(chatId);
-    if (!isPrivate && state.groups[groupKey]?.isDisabled) {
-        // Проверяем, не админ ли пишет команду разблокировки? (пока нет такой, просто игнорим)
-        return; 
-    }
+    // Определяем тип и медиа для логов
+    let msgType = 'text';
+    let mediaUrl = '';
     
-    // Если новой группы нет в базе - добавляем
+    if (msg.photo) { msgType = 'photo'; mediaUrl = 'Photo'; }
+    else if (msg.voice) { msgType = 'voice'; mediaUrl = 'Voice'; }
+    else if (msg.video) { msgType = 'video'; mediaUrl = 'Video'; }
+    else if (msg.video_note) { msgType = 'video_note'; mediaUrl = 'Video Note'; }
+    else if (msg.sticker) { msgType = 'sticker'; }
+    else if (msg.document) { msgType = 'document'; }
+    
+    // Если текста нет, но есть медиа - ставим заглушку для админки
+    const displayText = text || (mediaUrl ? `[${mediaUrl}]` : `[${msgType}]`);
+
+    // 1. ПРОВЕРКА ОТКЛЮЧЕННЫХ ГРУПП
+    const groupKey = String(chatId);
+    if (!isPrivate && state.groups[groupKey]?.isDisabled) return;
+    
     if (!isPrivate && !state.groups[groupKey]) {
         await set(ref(db, `groups/${groupKey}`), {
             id: chatId,
@@ -336,15 +386,17 @@ const processUpdate = async (update) => {
 
     const logMsg = {
         dir: 'in',
-        text: text,
-        type: 'text',
+        text: displayText,
+        type: msgType,
+        mediaUrl: mediaUrl === 'Photo' || mediaUrl === 'Voice' ? '' : mediaUrl, // Пустая строка URL т.к. мы не качаем файлы на сервер
         time: new Date().toLocaleTimeString('ru-RU'),
-        timestamp: Date.now(), // !!! FIX ДЛЯ ГРАФИКОВ
+        timestamp: Date.now(),
         isGroup: !isPrivate,
-        user: user.first_name 
+        user: user.first_name,
+        userId: user.id
     };
 
-    // Сохраняем всегда для истории
+    // Сохраняем всегда
     await updateUserHistory(user, logMsg);
     if (isTargetChat) {
         await updateTopicHistory(threadId, { ...logMsg, isIncoming: true }, topicNameGuess);
@@ -352,108 +404,90 @@ const processUpdate = async (update) => {
 
     if (user.is_bot) return;
 
-    // 2. ФИЛЬТР МАТА (BAD WORDS) (FIXED)
-    if (state.config.bannedWords && !isPrivate) {
+    // 2. ФИЛЬТР МАТА
+    if (state.config.bannedWords && !isPrivate && text) {
         const badWords = state.config.bannedWords.split(',').map(w => w.trim().toLowerCase()).filter(w => w);
         if (badWords.some(w => text.toLowerCase().includes(w))) {
             await deleteMessage(chatId, msg.message_id);
             const warnMsg = await sendMessage(chatId, `⚠️ @${user.username || user.first_name}, это слово запрещено!`, { message_thread_id: threadId !== 'general' ? threadId : undefined });
+            setTimeout(() => { if (warnMsg?.result) deleteMessage(chatId, warnMsg.result.message_id); }, 5000);
             
-            // Удаляем предупреждение через 5 сек чтобы не мусорить
-            setTimeout(() => {
-                if (warnMsg && warnMsg.result) deleteMessage(chatId, warnMsg.result.message_id);
-            }, 5000);
-
-            // Выдаем варн в БД
             const userRef = (await get(ref(db, `users/${user.id}`))).val() || {};
             await update(ref(db, `users/${user.id}`), { warnings: (userRef.warnings || 0) + 1 });
             return; 
         }
     }
 
-    // Если бот на паузе - дальше не идем
     if (!state.isBotActive) return;
     if (isPrivate && !state.config.enablePM) return;
 
-    // 3. КОМАНДЫ
-    const lowerText = text.toLowerCase();
-    
-    // Системные команды (Hardcoded logic for execution)
-    if (lowerText.startsWith('/warn') || lowerText.startsWith('/mute') || lowerText.startsWith('/ban') || lowerText.startsWith('/unmute')) {
-        const cmd = lowerText.split(' ')[0];
-        // Проверяем права админа (строгое сравнение строк)
-        if (state.config.adminIds && state.config.adminIds.includes(String(user.id))) {
-            await handleSystemCommand(cmd, msg, threadId !== 'general' ? threadId : undefined);
-            return;
-        } else {
-            // Можно ответить, что нет прав, или промолчать
-            // console.log(`User ${user.id} tried system command but is not admin`);
+    // 3. КОМАНДЫ (Только если есть текст)
+    if (text) {
+        const lowerText = text.toLowerCase();
+        
+        if (['/warn', '/mute', '/ban', '/unmute'].some(c => lowerText.startsWith(c))) {
+            const cmd = lowerText.split(' ')[0];
+            if (state.config.adminIds && state.config.adminIds.includes(String(user.id))) {
+                await handleSystemCommand(cmd, msg, threadId !== 'general' ? threadId : undefined);
+                return;
+            }
         }
-    }
 
-    let commandHandled = false;
-    // Сортируем: сначала exact match, потом contains
-    const sortedCommands = [...state.commands].sort((a, b) => {
-        if (a.matchType === 'exact') return -1;
-        return 1;
-    });
+        let commandHandled = false;
+        const sortedCommands = [...state.commands].sort((a, b) => (a.matchType === 'exact' ? -1 : 1));
 
-    for (const cmd of sortedCommands) {
-        let match = false;
-        const trig = cmd.trigger.toLowerCase();
+        for (const cmd of sortedCommands) {
+            let match = false;
+            const trig = cmd.trigger.toLowerCase();
+            if (cmd.matchType === 'exact' && lowerText === trig) match = true;
+            else if (cmd.matchType === 'start' && lowerText.startsWith(trig)) match = true;
+            else if (cmd.matchType === 'contains' && lowerText.includes(trig)) match = true;
 
-        if (cmd.matchType === 'exact' && lowerText === trig) match = true;
-        else if (cmd.matchType === 'start' && lowerText.startsWith(trig)) match = true;
-        else if (cmd.matchType === 'contains' && lowerText.includes(trig)) match = true;
+            if (match) {
+                if (cmd.allowedTopicId === 'private_only' && !isPrivate) continue;
+                if (cmd.allowedTopicId && cmd.allowedTopicId !== 'private_only' && cmd.allowedTopicId !== threadId && !isPrivate) continue;
 
-        if (match) {
-            if (cmd.allowedTopicId === 'private_only' && !isPrivate) continue;
-            if (cmd.allowedTopicId && cmd.allowedTopicId !== 'private_only' && cmd.allowedTopicId !== threadId && !isPrivate) continue;
-
-            const targetThread = (cmd.isSystem && cmd.notificationTopicId) ? cmd.notificationTopicId : threadId;
-            
-            const replyMarkup = cmd.buttons && cmd.buttons.length > 0 ? {
-                inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }])
-            } : undefined;
-
-            await sendMessage(chatId, cmd.response, { 
-                message_thread_id: targetThread !== 'general' ? targetThread : undefined,
-                reply_markup: replyMarkup
-            });
-            
-            commandHandled = true;
-            break; 
+                const targetThread = (cmd.isSystem && cmd.notificationTopicId) ? cmd.notificationTopicId : threadId;
+                const replyMarkup = cmd.buttons && cmd.buttons.length > 0 ? { inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
+                await sendMessage(chatId, cmd.response, { message_thread_id: targetThread !== 'general' ? targetThread : undefined, reply_markup: replyMarkup });
+                commandHandled = true;
+                break; 
+            }
         }
-    }
 
-    // 4. AI
-    if (!commandHandled && state.config.enableAI) {
-        const isMention = lowerText.includes('хеликс') || lowerText.includes('helix') || (isPrivate && state.config.enablePM);
-        const isDisabled = state.disabledAiTopics.includes(threadId);
+        // 4. AI
+        if (!commandHandled && state.config.enableAI) {
+            const isMention = lowerText.includes('хеликс') || lowerText.includes('helix') || (isPrivate && state.config.enablePM);
+            const isDisabled = state.disabledAiTopics.includes(threadId);
 
-        if (isMention && !isDisabled) {
-            const question = text.replace(/хеликс|helix/gi, '').trim();
-            if (!question && !isPrivate) return;
+            if (isMention && !isDisabled) {
+                const question = text.replace(/хеликс|helix/gi, '').trim();
+                // В группах отвечаем только если есть вопрос, в ЛС - всегда
+                if (!question && !isPrivate) return;
 
-            const answer = await getAIResponse(question || "Привет", user.first_name);
-            
-            await sendMessage(chatId, answer, { 
-                reply_to_message_id: msg.message_id,
-                message_thread_id: threadId !== 'general' ? threadId : undefined
-            });
+                const answer = await getAIResponse(question || "Привет", user.first_name);
+                
+                await sendMessage(chatId, answer, { 
+                    reply_to_message_id: msg.message_id,
+                    message_thread_id: threadId !== 'general' ? threadId : undefined
+                });
 
-            const newHistory = [{ query: question || "Привет", response: answer, time: Date.now() }, ...state.aiStats.history].slice(0, 100);
-            await set(ref(db, 'aiStats'), { total: state.aiStats.total + 1, history: newHistory });
+                // Важно: Сохраняем AI статистику как массив объектов
+                const currentHistory = Array.isArray(state.aiStats.history) ? state.aiStats.history : [];
+                const newHistory = [{ query: question || "Привет", response: answer, time: Date.now() }, ...currentHistory].slice(0, 100);
+                
+                await set(ref(db, 'aiStats'), { total: (state.aiStats.total || 0) + 1, history: newHistory });
 
-            if (isTargetChat) {
-                await updateTopicHistory(threadId, {
-                    user: 'Bot',
-                    text: answer,
-                    isIncoming: false,
-                    time: new Date().toLocaleTimeString('ru-RU'),
-                    timestamp: Date.now(),
-                    type: 'text'
-                }, null);
+                if (isTargetChat) {
+                    await updateTopicHistory(threadId, {
+                        user: 'Bot',
+                        text: answer,
+                        isIncoming: false,
+                        time: new Date().toLocaleTimeString('ru-RU'),
+                        timestamp: Date.now(),
+                        type: 'text'
+                    }, null);
+                }
             }
         }
     }
@@ -463,9 +497,7 @@ const processUpdate = async (update) => {
 // 8. ЗАПУСК
 // ==========================================
 const startLoop = async () => {
-    setInterval(() => {
-        set(ref(db, 'status/heartbeat'), Date.now());
-    }, 60000);
+    setInterval(() => { set(ref(db, 'status/heartbeat'), Date.now()); }, 60000);
 
     while (true) {
         if (state.config.token) {

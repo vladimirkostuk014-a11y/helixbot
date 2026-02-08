@@ -8,7 +8,7 @@ import Commands from './components/Commands';
 import Broadcasts from './components/Broadcasts'; 
 import AuditLogs from './components/AuditLogs'; 
 import CalendarEvents from './components/CalendarEvents';
-import { BotConfig, Command, KnowledgeItem, AiStats, Group, QuickReply, LogEntry, CalendarEvent, User as UserType } from './types';
+import { BotConfig, Command, KnowledgeItem, AiStats, AiStat, Group, QuickReply, LogEntry, CalendarEvent, User as UserType } from './types';
 import { apiCall } from './services/api';
 import UserCRM from './components/UserCRM';
 import { subscribeToData, saveData } from './services/firebase'; 
@@ -100,7 +100,21 @@ const App = () => {
         sub('commands', (val) => { setCommands(toArray(val)); markLoaded('commands'); });
         sub('quickReplies', (val) => { setQuickReplies(toArray(val)); markLoaded('quickReplies'); });
         sub('auditLogs', (val) => { setAuditLogs(toArray(val)); markLoaded('auditLogs'); });
-        sub('aiStats', (val) => { if (val) { if(!val.history) val.history = []; else val.history = toArray(val.history); setAiStats(val); } else setAiStats({total:0, history:[]}); markLoaded('aiStats'); });
+        
+        // Fix for AiStats Type and Structure
+        sub('aiStats', (val) => { 
+            if (val) { 
+                const newStats = {
+                    total: val.total || 0,
+                    history: val.history ? toArray<AiStat>(val.history) : []
+                };
+                setAiStats(newStats); 
+            } else {
+                setAiStats({total: 0, history: []});
+            }
+            markLoaded('aiStats'); 
+        });
+        
         sub('categories', (val) => { if(val) setCategories(toArray(val)); markLoaded('categories'); });
         sub('topicNames', (val) => { if(val) setTopicNames(val); markLoaded('topicNames'); });
         sub('disabledAiTopics', (val) => { if(val) setDisabledAiTopics(toArray(val)); else setDisabledAiTopics([]); markLoaded('disabledAiTopics'); });
@@ -138,13 +152,25 @@ const App = () => {
     };
 
     const clearAiHistory = () => {
-        saveData('aiStats', { total: 0, history: [] }); 
+        // 1. Prepare empty data
+        const emptyStats = { total: 0, history: [] };
+        
+        // 2. Clear Firebase
+        saveData('aiStats', emptyStats); 
         saveData('topicHistory', {});
+        
+        // 3. Clear Local State IMMEDIATELY
+        setAiStats(emptyStats);
+        setTopicHistory({});
+
+        // 4. Clear Users History (Local + Firebase)
         const clearedUsers = { ...users };
         Object.keys(clearedUsers).forEach(key => {
             clearedUsers[key] = { ...clearedUsers[key], history: [], msgCount: 0, dailyMsgCount: 0 };
         });
+        setUsers(clearedUsers);
         saveData('users', clearedUsers);
+        
         addLog('Система', 'История очищена через панель', 'warning');
     };
 
