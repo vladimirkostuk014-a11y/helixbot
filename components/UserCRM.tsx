@@ -35,7 +35,6 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
     useEffect(() => {
         if (selectedUser && selectedUser.unreadCount) {
              setUsers(prev => ({ ...prev, [selectedUser.id]: { ...prev[selectedUser.id], unreadCount: 0 } }));
-             // Persist read status
              saveData(`users/${selectedUser.id}/unreadCount`, 0);
         }
     }, [selectedUserId]);
@@ -46,10 +45,14 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
         }
     }, [selectedUser, users, isSending]); 
 
-    // Filter Users: Remove bots and system accounts
+    // Filter Users: Remove bots, system accounts, and groups (ID < 0)
     const getFilteredUsers = () => {
         return (Object.values(users) as User[]).filter((u: User) => {
-            if (u.id === 777000 || u.id === 1087968824 || u.name.includes('Bot')) return false; 
+            // Filter out system users and groups
+            if (u.id < 0) return false; // Group IDs are negative
+            if (u.id === 777000 || u.id === 1087968824) return false;
+            if (u.name.toLowerCase().includes('bot') || u.name === 'Group') return false; 
+            
             if (searchTerm) {
                 const term = searchTerm.toLowerCase();
                 return u.name.toLowerCase().includes(term) || u.username?.toLowerCase().includes(term) || String(u.id).includes(term);
@@ -68,12 +71,10 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
     const handleClearHistory = () => {
         if (!selectedUserId) return;
         if (window.confirm('Вы уверены, что хотите очистить переписку с этим пользователем?')) {
-            // Update Local
             setUsers(prev => ({
                 ...prev,
                 [selectedUserId]: { ...prev[selectedUserId], history: [] }
             }));
-            // Update Firebase
             saveData(`users/${selectedUserId}/history`, []);
             if (addLog) addLog('CRM', `Очищена история с ${selectedUser?.name}`, 'info');
         }
@@ -192,7 +193,6 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
         setIsSending(true);
         
         try {
-            // FIX: Ensure mutual exclusivity of button fields
             const markup = buttons.length > 0 ? JSON.stringify({ 
                 inline_keyboard: buttons.map(b => {
                     let url = b.url;
@@ -378,8 +378,8 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
 
                         {/* Actions Sidebar */}
                         <div className="w-72 bg-[#121214] border-l border-gray-800 p-6 overflow-y-auto custom-scrollbar">
-                            
-                            {/* Hide Punishments if User is Admin */}
+                            {/* Actions ... (Same as before) */}
+                             {/* Hide Punishments if User is Admin */}
                             {selectedUser.role !== 'admin' && (
                                 <>
                                     <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4">Наказания</h3>
@@ -395,7 +395,7 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
                                             <button onClick={() => handleWarn(1)} className="flex-1 bg-red-900/30 hover:bg-red-900/50 text-red-400 border border-red-900/50 py-2 rounded-lg font-bold text-lg">+</button>
                                         </div>
                                     </div>
-
+                                    
                                     {/* Mute */}
                                     <div className="mb-6 p-4 bg-black/30 rounded-xl border border-gray-800">
                                         <div className="flex justify-between items-center mb-3">
@@ -408,13 +408,9 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
                                             <button onClick={() => handleMute(1440)} className="bg-gray-800 hover:bg-gray-700 text-xs py-2 rounded text-gray-300">24 ч</button>
                                             <button onClick={() => handleMute(0)} className="bg-gray-800 hover:bg-gray-700 text-xs py-2 rounded text-gray-300">Вечно</button>
                                         </div>
-                                        <div className="flex gap-2 mb-2">
-                                            <input type="number" placeholder="Мин" value={customMuteTime} onChange={e => setCustomMuteTime(e.target.value)} className="w-16 bg-black border border-gray-700 rounded px-2 text-xs text-white text-center"/>
-                                            <button onClick={() => handleMute(parseInt(customMuteTime))} className="flex-1 bg-blue-900/30 hover:bg-blue-900/50 text-blue-400 border border-blue-900/50 text-xs rounded font-bold">ОК</button>
-                                        </div>
                                         <button onClick={handleUnmute} className="w-full bg-green-900/20 hover:bg-green-900/40 text-green-400 border border-green-900/50 text-xs py-2 rounded transition-colors">Снять Мут</button>
                                     </div>
-
+                                    
                                     {/* Ban */}
                                     <div className="mb-6">
                                         <button 
@@ -424,18 +420,17 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
                                             {selectedUser.status === 'banned' ? <><Icons.Check size={18}/> Разбанить</> : <><Icons.Slash size={18}/> ЗАБАНИТЬ</>}
                                         </button>
                                     </div>
-                                    <div className="border-t border-gray-800 pt-4 mb-4"></div>
                                 </>
                             )}
-
-                            {/* Roles */}
-                            <div>
+                             
+                             <div>
                                 <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Роль</h3>
                                 <div className="flex bg-black rounded-lg p-1 border border-gray-800">
                                     <button onClick={() => handleRoleChange('user')} className={`flex-1 text-xs py-1.5 rounded transition-colors ${selectedUser.role === 'user' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-white'}`}>Юзер</button>
                                     <button onClick={() => handleRoleChange('admin')} className={`flex-1 text-xs py-1.5 rounded transition-colors ${selectedUser.role === 'admin' ? 'bg-yellow-600 text-black font-bold' : 'text-gray-500 hover:text-white'}`}>Админ</button>
                                 </div>
                             </div>
+
                         </div>
                     </div>
                 </div>
