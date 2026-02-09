@@ -32,7 +32,7 @@ const App = () => {
     const [isBotActive, setIsBotActive] = useState(true); 
     const [lastHeartbeat, setLastHeartbeat] = useState(0);
     const [loadedSections, setLoadedSections] = useState<Set<string>>(new Set());
-    const [isSidebarOpen, setIsSidebarOpen] = useState(false); 
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Mobile sidebar state
     
     // Config
     const [config, setConfig] = useState<BotConfig>({
@@ -53,8 +53,7 @@ const App = () => {
         aiProfanity: false,
         aiTemperature: 0.3,
         aiMaxTokens: 1000, 
-        bannedWords: '',
-        jokes: ''
+        bannedWords: '' 
     });
     
     // Data States
@@ -128,7 +127,7 @@ const App = () => {
         return () => unsubs.forEach(fn => fn && fn());
     }, []);
 
-    // --- AUTO-SAVE ---
+    // --- AUTO-SAVE (Front -> Firebase) ---
     useEffect(() => { if (canSave('config')) saveData('config', config); }, [config, loadedSections]);
     useEffect(() => { if (canSave('users')) saveData('users', users); }, [users, loadedSections]);
     useEffect(() => { if (canSave('groups')) saveData('groups', groups); }, [groups, loadedSections]);
@@ -139,7 +138,7 @@ const App = () => {
     useEffect(() => { if (canSave('disabledAiTopics')) saveData('disabledAiTopics', disabledAiTopics); }, [disabledAiTopics, loadedSections]);
     useEffect(() => { if (canSave('quickReplies')) saveData('quickReplies', quickReplies); }, [quickReplies, loadedSections]);
     
-    // Actions
+    // --- ACTIONS ---
     const toggleBotStatus = () => {
         const newState = !isBotActive;
         setIsBotActive(newState);
@@ -188,11 +187,14 @@ const App = () => {
 
     const handleLiveChatSend = async (data: { text: string; mediaUrl?: string; mediaFile?: File | null; buttons?: any[]; topicId: string }) => {
         const { text, mediaUrl, mediaFile, buttons, topicId } = data;
+        
         try {
             const markup = buttons && buttons.length > 0 ? JSON.stringify({ 
                 inline_keyboard: buttons.map(b => [{ text: b.text, url: b.url }]) 
             }) : undefined;
+            
             const threadId = topicId !== 'general' ? topicId : undefined;
+
             if (mediaFile) {
                 const fd = new FormData();
                 fd.append('chat_id', config.targetChatId);
@@ -218,16 +220,30 @@ const App = () => {
                     message_thread_id: threadId
                 }, config);
             }
-            const newMsg = { dir: 'out', text: text, type: 'text', time: new Date().toLocaleTimeString('ru-RU'), timestamp: Date.now(), isIncoming: false, isGroup: true, user: 'Admin' };
+
+            // Manually update local history for immediate feedback
+            const newMsg = {
+                dir: 'out',
+                text: text,
+                type: 'text',
+                time: new Date().toLocaleTimeString('ru-RU'),
+                timestamp: Date.now(),
+                isIncoming: false,
+                isGroup: true,
+                user: 'Admin'
+            };
+            
             const updatedTopicHistory = [...(topicHistory[topicId] || []), newMsg];
             setTopicHistory(prev => ({ ...prev, [topicId]: updatedTopicHistory }));
             saveData(`topicHistory/${topicId}`, updatedTopicHistory);
+
         } catch (e) {
             console.error(e);
             alert('Ошибка отправки сообщения');
         }
     };
 
+    // Calculate Uptime (90s threshold)
     const isOnline = (Date.now() - lastHeartbeat) < 90000; 
 
     const TabButton = ({ id, iconKey, label, badge }: any) => {
@@ -247,6 +263,24 @@ const App = () => {
 
     return (
         <div className="flex h-screen bg-[#09090b] text-gray-100 font-sans overflow-hidden">
+            {/* Mobile Header */}
+            <div className="md:hidden fixed top-0 left-0 right-0 h-16 bg-[#0c0c0e] border-b border-gray-800 flex items-center justify-between px-4 z-40 shadow-lg">
+                <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center text-white">
+                        <Icons.Zap size={18} />
+                    </div>
+                    <span className="font-bold text-white">Helix Bot</span>
+                </div>
+                <button onClick={() => setIsSidebarOpen(true)} className="p-2 text-gray-400 hover:text-white">
+                    <Icons.Settings size={24} />
+                </button>
+            </div>
+
+            {/* Mobile Sidebar Overlay */}
+            {isSidebarOpen && (
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 md:hidden" onClick={() => setIsSidebarOpen(false)} />
+            )}
+
             {/* Sidebar */}
             <div className={`
                 fixed inset-y-0 left-0 z-50 w-72 bg-[#0c0c0e] border-r border-gray-800 flex flex-col shrink-0 transition-transform duration-300
@@ -265,17 +299,21 @@ const App = () => {
                     </div>
                 </div>
 
-                {/* VPS Status Indicator (Restored) */}
+                <div className="md:hidden p-4 flex items-center justify-between border-b border-gray-800">
+                    <span className="font-bold text-gray-400">Меню</span>
+                    <button onClick={() => setIsSidebarOpen(false)}><Icons.X size={24}/></button>
+                </div>
+                
+                {/* Status Box (Visible in Sidebar) */}
                 <div className="px-6 mb-4">
-                     <div className={`rounded-lg p-3 border flex items-center justify-between transition-colors ${isOnline ? 'bg-green-500/10 border-green-500/20' : 'bg-red-500/10 border-red-500/20'}`}>
-                         <div className="flex items-center gap-2">
-                             <div className="relative">
-                                 <div className={`w-2.5 h-2.5 rounded-full ${isOnline ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                                 {isOnline && <div className="absolute inset-0 bg-green-500 rounded-full animate-ping opacity-75"></div>}
+                     <div className="bg-black/40 rounded-lg p-3 border border-gray-800/50 space-y-2">
+                        <div className="flex items-center justify-between">
+                             <span className="text-[10px] text-gray-500 uppercase font-bold">Сервер</span>
+                             <div className="flex items-center gap-1.5">
+                                 <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`}></div>
+                                 <span className={`text-[10px] font-bold ${isOnline ? 'text-green-400' : 'text-red-400'}`}>{isOnline ? 'ОНЛАЙН' : 'ОФФЛАЙН'}</span>
                              </div>
-                             <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">VPS Статус</span>
-                         </div>
-                         <span className={`text-[10px] font-black ${isOnline ? 'text-green-400' : 'text-red-400'}`}>{isOnline ? 'ONLINE' : 'OFFLINE'}</span>
+                        </div>
                     </div>
                 </div>
                 

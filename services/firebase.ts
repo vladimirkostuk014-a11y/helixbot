@@ -1,10 +1,7 @@
+
 // services/firebase.ts
 import { initializeApp } from "firebase/app";
-import * as database from "firebase/database";
-
-// Workaround for TypeScript error: "Module 'firebase/database' has no exported member..."
-// This can happen if the type definitions are not picked up correctly.
-const { getDatabase, ref, set, onValue, remove, update } = database as any;
+import { getDatabase, ref, set, onValue, remove, update } from "firebase/database";
 
 // ==========================================
 // КОНФИГУРАЦИЯ FIREBASE (HELIX BOT)
@@ -60,10 +57,10 @@ export const saveData = async (path: string, data: any) => {
 export const subscribeToData = (path: string, callback: (data: any) => void) => {
     const dbRef = ref(db, path);
     
-    const unsubscribe = onValue(dbRef, (snapshot: any) => {
+    const unsubscribe = onValue(dbRef, (snapshot) => {
         const val = snapshot.val();
         callback(val);
-    }, (error: any) => {
+    }, (error) => {
         console.error(`[Firebase] Subscription error for ${path}:`, error);
     });
 

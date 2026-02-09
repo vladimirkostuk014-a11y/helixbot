@@ -57,7 +57,7 @@ const LiveChat: React.FC<LiveChatProps> = ({
     // Audio Notification
     const prevUnreadCountRef = useRef(0);
     useEffect(() => {
-        const totalUnread = (Object.values(unreadCounts) as number[]).reduce((a, b) => a + b, 0);
+        const totalUnread = Object.values(unreadCounts).reduce((a, b) => a + b, 0);
         if (totalUnread > prevUnreadCountRef.current) {
             // Play Sound
             const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'); // Simple Ding
@@ -66,15 +66,6 @@ const LiveChat: React.FC<LiveChatProps> = ({
         }
         prevUnreadCountRef.current = totalUnread;
     }, [unreadCounts]);
-
-    const handleTopicClick = (tid: string) => {
-        setActiveTopic(tid);
-        if (onMarkTopicRead) {
-            onMarkTopicRead(tid);
-            // Force save to firebase immediately
-            saveData(`topicUnreads/${tid}`, 0);
-        }
-    };
 
     const send = () => {
         if (!text.trim() && !mediaFile) return;
@@ -113,6 +104,13 @@ const LiveChat: React.FC<LiveChatProps> = ({
     const handleKeyDown = (e: React.KeyboardEvent, id: string) => {
         if (e.key === 'Enter') {
             saveEditing(id);
+        }
+    };
+    
+    const handleTopicClick = (tid: string) => {
+        setActiveTopic(tid);
+        if (onMarkTopicRead) {
+            onMarkTopicRead(tid);
         }
     };
     
@@ -163,6 +161,11 @@ const LiveChat: React.FC<LiveChatProps> = ({
         if (unreadA !== unreadB) return unreadB - unreadA;
         return timeB - timeA;
     });
+
+    // Mobile logic: 
+    // If activeTopic is set -> show chat (hide list on mobile)
+    // If activeTopic is NOT set -> show list (hide chat on mobile)
+    // On Desktop -> show both
 
     return (
         <div className="flex flex-col md:flex-row gap-4 h-[calc(100vh-140px)] md:h-[calc(100vh-100px)]">

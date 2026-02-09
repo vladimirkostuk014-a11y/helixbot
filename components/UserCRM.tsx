@@ -32,7 +32,7 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
 
     // AUDIO NOTIFICATION
     useEffect(() => {
-        const totalUnread = (Object.values(users) as User[]).reduce((acc, u) => acc + (u.unreadCount || 0), 0);
+        const totalUnread = Object.values(users).reduce((acc, u) => acc + (u.unreadCount || 0), 0);
         if (totalUnread > prevTotalUnreadRef.current) {
             const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
             audio.volume = 0.5;
@@ -41,18 +41,12 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
         prevTotalUnreadRef.current = totalUnread;
     }, [users]);
 
-    // Force clear unread count in DB when user is selected
     useEffect(() => {
-        if (selectedUserId && users[selectedUserId]?.unreadCount && users[selectedUserId].unreadCount > 0) {
-             // 1. Update local state instantly to reflect read status UI
-             setUsers(prev => ({ 
-                 ...prev, 
-                 [selectedUserId]: { ...prev[selectedUserId], unreadCount: 0 } 
-             }));
-             // 2. Persist to Firebase immediately
-             saveData(`users/${selectedUserId}/unreadCount`, 0);
+        if (selectedUser && selectedUser.unreadCount) {
+             setUsers(prev => ({ ...prev, [selectedUser.id]: { ...prev[selectedUser.id], unreadCount: 0 } }));
+             saveData(`users/${selectedUser.id}/unreadCount`, 0);
         }
-    }, [selectedUserId, users]);
+    }, [selectedUserId]);
 
     useEffect(() => {
         if (selectedUser && chatEndRef.current) {
@@ -268,7 +262,7 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
                                                 </div>
                                             </div>
                                             <div>
-                                                <label className="text-xs text-gray-500 uppercase font-bold block mb-1">Кнопки</label>
+                                                <label className="text-[10px] uppercase text-gray-500 font-bold mb-1 block">Кнопки</label>
                                                 <div className="flex gap-2 mb-1">
                                                     <input value={btnDraft.text} onChange={e => setBtnDraft({...btnDraft, text: e.target.value})} placeholder="Txt" className="w-1/3 bg-black border border-gray-600 rounded px-2 py-1 text-xs text-white"/>
                                                     <input value={btnDraft.url} onChange={e => setBtnDraft({...btnDraft, url: e.target.value})} placeholder="Url" className="flex-1 bg-black border border-gray-600 rounded px-2 py-1 text-xs text-white"/>

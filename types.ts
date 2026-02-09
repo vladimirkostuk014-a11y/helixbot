@@ -15,11 +15,9 @@ export interface BotConfig {
     aiPersonality: string; 
     aiBehavior: string;
     aiProfanity: boolean;
-    aiProfanityLevel?: number; // Новый параметр: Уровень мата 0-100
     aiTemperature: number;
     aiMaxTokens: number;
     bannedWords: string;
-    jokes?: string; // Банк шуток
 }
 
 export interface User {
