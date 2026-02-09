@@ -36,7 +36,7 @@ let lastUpdateId = 0;
 const processedUpdates = new Set();
 const sentCalendarNotifications = new Set();
 
-console.log("🔥 [SERVER] Helix Node Started (Strict MSK + Hard AI)...");
+console.log("🔥 [SERVER] Helix v8.0 Started (Memory + Strict Mode + Anti-Crash)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -66,7 +66,7 @@ onValue(ref(db, 'status/active'), (snap) => {
     state.isBotActive = snap.val() !== false; 
 });
 
-// HEARTBEAT (VPS CONNECTION STATUS)
+// HEARTBEAT
 setInterval(() => {
     set(ref(db, 'status/heartbeat'), Date.now()).catch(() => {});
 }, 30000);
@@ -92,78 +92,12 @@ const sendMessage = async (chatId, text, options = {}) => {
     return await apiCall('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', ...options });
 };
 
-const sendPhoto = async (chatId, photoUrl, caption, options = {}) => {
-    return await apiCall('sendPhoto', { chat_id: chatId, photo: photoUrl, caption, parse_mode: 'HTML', ...options });
-};
-
-const restrictUser = async (chatId, userId, permissions, untilDate = 0) => {
-    return await apiCall('restrictChatMember', {
-        chat_id: chatId,
-        user_id: userId,
-        permissions: JSON.stringify(permissions),
-        until_date: untilDate,
-        use_independent_chat_permissions: true 
-    });
+const leaveChat = async (chatId) => {
+    return await apiCall('leaveChat', { chat_id: chatId });
 };
 
 // ==========================================
-// 4. CRON ЗАДАЧИ (STRICT MSK TIME)
-// ==========================================
-const runCronJobs = async () => {
-    // Получаем текущее время СТРОГО в MSK
-    const mskDateString = new Date().toLocaleString("en-US", {timeZone: "Europe/Moscow"});
-    const mskNow = new Date(mskDateString);
-    
-    // Форматируем для сравнения с базой (HH:mm и YYYY-MM-DD)
-    const timeString = mskNow.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-    const dateString = mskNow.toLocaleDateString('ru-RU').split('.').reverse().join('-'); 
-    
-    // Очистка в 00:00 по МСК
-    if (timeString === '00:00') {
-        try {
-            await set(ref(db, 'topicHistory'), {});
-            await set(ref(db, 'topicUnreads'), {});
-            const usersRef = ref(db, 'users');
-            const snapshot = await get(usersRef);
-            const users = snapshot.val();
-            if (users) {
-                const updates = {};
-                Object.keys(users).forEach(uid => { updates[`${uid}/dailyMsgCount`] = 0; });
-                await firebaseUpdate(usersRef, updates);
-            }
-        } catch (e) { console.error("Cleanup error:", e); }
-        await new Promise(r => setTimeout(r, 60000));
-    }
-
-    // Календарь
-    if (state.calendarEvents && state.config.targetChatId && state.config.enableCalendarAlerts) {
-        for (const event of state.calendarEvents) {
-            // Сравниваем строки даты и времени
-            if (event.notifyDate === dateString && event.notifyTime === timeString) {
-                const uniqueKey = `${event.id}_${dateString}_${timeString}`;
-                if (!sentCalendarNotifications.has(uniqueKey)) {
-                    sentCalendarNotifications.add(uniqueKey);
-                    
-                    const msg = `⚡️ <b>${event.title}</b>\n\n📅 <b>Даты:</b> ${event.startDate} — ${event.endDate}\n📂 <i>Категория: ${event.category}</i>\n\n${event.description || ''}`;
-                    const inlineKeyboard = event.buttons && event.buttons.length > 0 ? { inline_keyboard: event.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
-                    const threadId = event.topicId !== 'general' ? event.topicId : undefined;
-
-                    if (event.mediaUrl && event.mediaUrl.startsWith('http')) {
-                         await sendPhoto(state.config.targetChatId, event.mediaUrl, msg, { reply_markup: inlineKeyboard, message_thread_id: threadId });
-                    } else {
-                         await sendMessage(state.config.targetChatId, msg, { reply_markup: inlineKeyboard, message_thread_id: threadId });
-                    }
-                }
-            }
-        }
-    }
-    // Очистка кеша уведомлений каждую минуту, чтобы не спамить
-    if (timeString.endsWith('01')) sentCalendarNotifications.clear();
-};
-setInterval(runCronJobs, 30000);
-
-// ==========================================
-// 5. CRM & HISTORY
+// 4. CRM & HISTORY
 // ==========================================
 const updateUserHistory = async (user, message) => {
     try {
@@ -171,6 +105,7 @@ const updateUserHistory = async (user, message) => {
         if (userId < 0) return;
 
         const userPath = `users/${userId}`;
+        // ВАЖНО: Читаем актуальное состояние перед записью
         const snapshot = await get(ref(db, userPath));
         const existingUser = snapshot.val() || {};
 
@@ -190,8 +125,13 @@ const updateUserHistory = async (user, message) => {
         const newHistory = [...currentUser.history, message].slice(-50); 
         currentUser.history = newHistory;
         
-        if (message.dir === 'in') currentUser.unreadCount = (existingUser.unreadCount || 0) + 1;
-        else currentUser.unreadCount = 0;
+        // Логика Unread: Если сообщение входящее (от юзера), увеличиваем счетчик.
+        // Если исходящее (от админа) - сбрасываем.
+        if (message.dir === 'in') {
+            currentUser.unreadCount = (existingUser.unreadCount || 0) + 1;
+        } else {
+            currentUser.unreadCount = 0;
+        }
 
         await set(ref(db, userPath), currentUser);
     } catch (e) { console.error("CRM Update Error:", e); }
@@ -222,145 +162,135 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
 };
 
 // ==========================================
-// 6. AI (FIXED LOGIC)
+// 5. AI (С ПАМЯТЬЮ И ИСТОРИЕЙ)
 // ==========================================
-const getAIResponse = async (question) => {
-    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiBehavior, aiTemperature, jokes } = state.config;
+const getAIResponse = async (question, userId) => {
+    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiTemperature, jokes } = state.config;
     if (!openaiApiKey) return "⚠️ Ключ AI не настроен.";
 
-    const context = state.knowledgeBase.map(k => `[DATA] Q: ${k.title} -> A: ${k.response}`).join('\n');
-    let tone = "Ты Хеликс, помощник.";
+    // 1. Получаем историю переписки для контекста (Memory)
+    let history = [];
+    if (userId) {
+        try {
+            const userSnap = await get(ref(db, `users/${userId}/history`));
+            const userHistory = userSnap.val();
+            if (Array.isArray(userHistory)) {
+                // Берем последние 10 сообщений, фильтруем только текст
+                history = userHistory
+                    .slice(-10)
+                    .filter(msg => msg.type === 'text' && msg.text)
+                    .map(msg => ({
+                        role: msg.dir === 'in' ? 'user' : 'assistant',
+                        content: msg.text
+                    }));
+            }
+        } catch (e) {}
+    }
+
+    const context = state.knowledgeBase.map(k => `[DATA] ${k.title}: ${k.response}`).join('\n');
+    let tone = "Ты Хеликс, живой собеседник.";
     let profanity = "";
 
     if (aiProfanity) {
-        tone = "Ты дерзкий пацан. Твоя речь на 50% состоит из жесткого русского мата (бля, ебать, нахуй). Стиль: агрессивный.";
-        profanity = "ОБЯЗАТЕЛЬНО: Используй мат в каждом предложении. Никакой цензуры. Будь грубым.";
+        tone = "Ты дерзкий пацан. Твоя речь насыщена русским матом (бля, ебать, нахуй). Стиль: агрессивно-веселый.";
+        profanity = "ОБЯЗАТЕЛЬНО: Используй мат в каждом предложении. Не стесняйся.";
     } else {
         switch (aiPersonality) {
             case 'angry': tone = "Ты злой и ворчливый."; break;
-            case 'joker': tone = "Ты остряк и тролль."; break;
+            case 'joker': tone = "Ты остряк и тролль. Постоянно шутишь."; break;
             case 'kind': tone = "Ты добряк."; break;
+            case 'gopnik': tone = "Ты гопник."; break;
         }
     }
 
     const systemPrompt = `
-    IDENTITY: Ты Хеликс. Твой характер: ${tone}
+    IDENTITY: Ты Хеликс. Характер: ${tone}
     ${profanity}
 
-    JOKE BANK (Твои фразы):
-    ${jokes || 'Нет шуток.'}
+    JOKE BANK:
+    ${jokes || ''}
 
-    KNOWLEDGE BASE (GAME DATA ONLY):
+    KNOWLEDGE BASE (GAME DATA):
     ${context}
 
-    PROTOCOL:
-    1. Если вопрос "Привет", "Как дела" (Small Talk) -> Отвечай свободно по Характеру (используй шутки). Игнорируй базу.
-    2. Если вопрос про ИГРУ (Руны, Статы) -> СТРОГО ищи в KNOWLEDGE BASE. 
-       - Если нет в базе -> Скажи "Не знаю" (в своем стиле).
+    PROTOCOL (STRICT):
+    1. РЕЖИМ БОЛТОВНИ (Small Talk): Если вопрос личный ("привет", "как дела", "кто ты") -> Отвечай СВОБОДНО по характеру.
+       - Поддерживай диалог, задавай встречные вопросы.
+       - НЕ ЗДОРОВАЙСЯ КАЖДЫЙ РАЗ, если видишь историю переписки.
+    
+    2. РЕЖИМ БАЗЫ (Game Questions): Если вопрос по ИГРЕ -> СТРОГО ищи в KNOWLEDGE BASE. 
+       - Если нет в базе -> Скажи "Не знаю" / "В моих записях этого нет".
        - ЗАПРЕЩЕНО ВЫДУМЫВАТЬ ЦИФРЫ.
 
-    Язык: Русский. Используй абзацы.
+    Язык: Русский.
     `;
 
     try {
+        const messages = [
+            { role: "system", content: systemPrompt },
+            ...history,
+            { role: "user", content: question }
+        ];
+
         const response = await fetch(`${aiBaseUrl || 'https://api.groq.com/openai/v1'}/chat/completions`, {
             method: "POST",
             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${openaiApiKey}` },
             body: JSON.stringify({
                 model: aiModel || "llama-3.3-70b-versatile",
-                messages: [{ role: "system", content: systemPrompt }, { role: "user", content: question }],
-                temperature: aiTemperature || 0.5,
+                messages: messages,
+                temperature: aiTemperature || 0.6,
                 max_tokens: 800
             })
         });
         
-        if (response.status === 429) return "Братишка, я устал (лимиты), приду в себя через пару минут.";
+        if (response.status === 429) return "Фа, я устал пэпэ, вернусь через пару минут)";
         const data = await response.json();
         return data.choices?.[0]?.message?.content || "Ошибка AI.";
     } catch (e) { return "Ошибка сети AI."; }
 };
 
 // ==========================================
-// 7. СИСТЕМНЫЕ КОМАНДЫ
-// ==========================================
-const handleSystemCommand = async (command, msg, targetThread) => {
-    const chatId = msg.chat.id;
-    const reply = msg.reply_to_message;
-    
-    if (reply && reply.from) {
-        const targetUser = reply.from;
-        if (targetUser.is_bot) return;
-
-        if (command === '/warn') {
-            const userPath = `users/${targetUser.id}`;
-            const userSnap = await get(ref(db, userPath));
-            const userData = userSnap.val() || {};
-            const newWarns = (userData.warnings || 0) + 1;
-            
-            await firebaseUpdate(ref(db, userPath), { 
-                warnings: newWarns, 
-                name: targetUser.first_name, 
-                username: targetUser.username || '' 
-            });
-            
-            if (newWarns >= 3) {
-                await restrictUser(chatId, targetUser.id, { can_send_messages: false }, Math.floor(Date.now()/1000) + 172800);
-                await firebaseUpdate(ref(db, userPath), { warnings: 0, status: 'muted' });
-                return sendMessage(chatId, `🛑 <b>${targetUser.first_name}</b> получил 3/3 варнов и заглушен на 48 часов.`, { message_thread_id: targetThread });
-            } else {
-                return sendMessage(chatId, `⚠️ <b>${targetUser.first_name}</b>, предупреждение (${newWarns}/3).`, { message_thread_id: targetThread });
-            }
-        }
-    }
-};
-
-// ==========================================
-// 8. ОБРАБОТКА
+// 6. ОБРАБОТКА ОБНОВЛЕНИЙ
 // ==========================================
 const processUpdate = async (tgUpdate) => {
     const msg = tgUpdate.message;
     if (!msg) return; 
 
-    // FILTER CHATS
     const chatId = String(msg.chat.id);
     const targetChatId = String(state.config.targetChatId);
     const isPrivate = msg.chat.type === 'private';
+    const user = msg.from;
+    
+    // ANTI-CRASH & FILTERING: Игнорируем левые чаты
+    if (!isPrivate && chatId !== targetChatId) {
+        console.log(`[Security] Leaving unknown chat: ${chatId} (${msg.chat.title})`);
+        await leaveChat(chatId);
+        return;
+    }
 
-    if (!isPrivate && chatId !== targetChatId) return;
+    if (user.is_bot) return;
 
     const threadId = msg.message_thread_id ? String(msg.message_thread_id) : 'general';
     const text = (msg.text || msg.caption || '').trim();
-    const user = msg.from;
 
+    // Логируем
     const logMsg = {
-        dir: 'in', text: text || `[Media]`, type: msg.photo ? 'photo' : 'text',
+        dir: 'in', 
+        text: text || `[Media]`, 
+        type: msg.photo ? 'photo' : 'text',
         time: new Date().toLocaleTimeString('ru-RU'),
-        isGroup: !isPrivate, user: user.first_name, userId: user.id
+        isGroup: !isPrivate, 
+        user: user.first_name, 
+        userId: user.id
     };
 
     await updateUserHistory(user, logMsg);
     if (!isPrivate) await updateTopicHistory(threadId, { ...logMsg, isIncoming: true }, null);
 
-    if (user.is_bot) return;
     if (!state.isBotActive) return;
 
     if (text) {
         const lowerText = text.toLowerCase();
-        
-        if (lowerText.startsWith('/лещ') || lowerText.startsWith('/slap')) {
-            const target = msg.reply_to_message ? msg.reply_to_message.from.first_name : (text.split(' ').slice(1).join(' ') || 'воздух');
-            const replyText = `👋 <b>${user.first_name}</b> дал смачного леща <b>${target}</b>!`;
-            await sendMessage(chatId, replyText, { message_thread_id: threadId !== 'general' ? threadId : undefined });
-            return;
-        }
-
-        if (['/warn', '/mute'].some(c => lowerText.startsWith(c))) {
-            const cmd = lowerText.split(' ')[0];
-            if (state.config.adminIds && state.config.adminIds.includes(String(user.id))) {
-                await handleSystemCommand(cmd, msg, threadId !== 'general' ? threadId : undefined);
-                return;
-            }
-        }
         
         // AI Logic
         if (state.config.enableAI) {
@@ -369,13 +299,26 @@ const processUpdate = async (tgUpdate) => {
 
             if (isMention && !isDisabled) {
                 const question = text.replace(/хеликс|helix/gi, '').trim();
-                const answer = await getAIResponse(question || "Привет");
+                // Передаем UserID для подтягивания истории
+                const answer = await getAIResponse(question || "Привет", user.id);
                 
                 await sendMessage(chatId, answer, { 
                     reply_to_message_id: msg.message_id,
                     message_thread_id: threadId !== 'general' ? threadId : undefined
                 });
                 
+                // Сохраняем ответ бота в историю (чтобы бот помнил свои ответы)
+                const aiMsg = { 
+                    dir: 'out', 
+                    text: answer, 
+                    type: 'text', 
+                    time: new Date().toLocaleTimeString('ru-RU'), 
+                    isGroup: !isPrivate, 
+                    user: 'Bot' 
+                };
+                await updateUserHistory(user, aiMsg);
+
+                // Stats
                 const curHistRaw = state.aiStats?.history;
                 const curHist = Array.isArray(curHistRaw) ? curHistRaw : [];
                 const newStat = { query: question || "Привет", response: answer, time: Date.now() };
@@ -384,8 +327,6 @@ const processUpdate = async (tgUpdate) => {
                     total: (state.aiStats?.total || 0) + 1, 
                     history: [newStat, ...curHist].slice(0, 100) 
                 });
-                
-                if (!isPrivate) await updateTopicHistory(threadId, { user: 'Bot', text: answer, isIncoming: false, time: new Date().toLocaleTimeString('ru-RU'), type: 'text' }, null);
             }
         }
     }

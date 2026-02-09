@@ -19,79 +19,80 @@ export const apiCall = async (method: string, body: any = {}, config: BotConfig,
         return await response.json();
     } catch (error: any) {
         if (error.message === 'Failed to fetch' || error.name === 'TypeError') {
-            try {
-                const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-                const proxyResponse = await fetch(proxyUrl, options);
-                return await proxyResponse.json();
-            } catch (proxyError: any) {
-                return { ok: false, error: 'Network Error' };
-            }
+            return { ok: false, error: 'Network Error' };
         }
         return { ok: false, error: error.message };
     }
 };
 
-export const getAIResponse = async (question: string, config: BotConfig, knowledgeBaseContext: string) => {
+// Функция теперь принимает историю сообщений
+export const getAIResponse = async (
+    question: string, 
+    config: BotConfig, 
+    knowledgeBaseContext: string,
+    history: { role: string, content: string }[] = [] 
+) => {
     const baseUrl = config.aiBaseUrl || 'https://api.groq.com/openai/v1';
     const apiKey = config.openaiApiKey; 
 
     if (!apiKey) return "⚠️ Ключ AI не найден.";
 
     // --- 1. ЛИЧНОСТЬ И ТОН ---
-    let tone = "Ты Хеликс, полезный помощник.";
+    let tone = "Ты Хеликс, живой и интересный собеседник.";
     let profanityInstr = "";
 
     if (config.aiProfanity) {
-        tone = "Ты дерзкий, агрессивный персонаж. Используй ЖЕСТКИЙ РУССКИЙ МАТ (бля, ебать, нахуй, сука) в КАЖДОМ предложении. Будь грубым. Твой стиль: 'слышь, ты че попутал', 'за базар ответишь'.";
-        profanityInstr = "КРИТИЧЕСКОЕ ПРАВИЛО: Общайся максимально по-пацански, матерись без стеснения. Ты реальный гопник.";
+        tone = "Ты дерзкий пацан. Твоя речь насыщена русским матом и уличным сленгом. Ты не стесняешься в выражениях, можешь жестко подколоть.";
+        profanityInstr = "ВАЖНО: Общайся как реальный пацан с района. Используй мат (бля, ебать, нахуй, сука) органично в каждом сообщении. Будь агрессивно-веселым.";
     } else {
         switch (config.aiPersonality) {
-            case 'angry': tone = "Ты злой и ворчливый. Тебя всё бесит."; break;
-            case 'joker': tone = "Ты остряк и тролль. Твои ответы полны сарказма."; break;
-            case 'gopnik': tone = "Ты гопник. Используй сленг: 'братишка', 'слышь'."; break;
-            case 'kind': tone = "Ты невероятно добрый, милый и заботливый."; break;
-            case 'philosopher': tone = "Ты философ. Отвечаешь загадками."; break;
-            case 'cyberpunk': tone = "Ты кибер-имплант из будущего."; break;
-            case 'official': tone = "Ты сухой бюрократ. Только факты."; break;
-            default: tone = "Ты Хеликс, сбалансированный помощник.";
+            case 'angry': tone = "Ты злой, ворчливый и токсичный. Тебя всё бесит."; break;
+            case 'joker': tone = "Ты весельчак, стендапер и тролль. Постоянно шутишь и сарказмируешь."; break;
+            case 'gopnik': tone = "Ты гопник. Используй: 'слышь', 'братишка', 'есть семки?', 'че по мелочи'."; break;
+            case 'kind': tone = "Ты очень добрый, заботливый и милый друг."; break;
+            case 'official': tone = "Ты официальный ассистент. Отвечаешь сухо и по делу."; break;
+            default: tone = "Ты Хеликс, приятный, умный и харизматичный собеседник.";
         }
     }
 
-    // --- 2. СТИЛЬ (ДЛИНА) ---
-    let style = "Отвечай умеренно (2-3 абзаца).";
-    if (config.aiBehavior === 'concise') style = "Отвечай ОЧЕНЬ кратко. Одно предложение.";
-    if (config.aiBehavior === 'detailed') style = "Отвечай МАКСИМАЛЬНО ПОДРОБНО. Разверни мысль.";
-    if (config.aiBehavior === 'bullet') style = "Отвечай списком (буллитами).";
-
     const systemInstruction = `
 ### IDENTITY ###
-Имя: Хеликс. Характер: ${tone}
+Имя: Хеликс.
+Характер: ${tone}
 ${profanityInstr}
-Язык: Русский (ГРАМОТНЫЙ, используй абзацы).
+Язык: Русский (Естественный, разговорный, используй абзацы для читаемости).
 
 ### JOKE BANK (ТВОИ КОРОННЫЕ ФРАЗЫ) ###
-Иногда (раз в 3-4 сообщения) используй эти шутки в диалоге:
-${config.jokes || 'Пока нет шуток.'}
+Используй их иногда, чтобы разбавить диалог:
+${config.jokes || 'Нет шуток.'}
 
-### KNOWLEDGE BASE (GAME DATA) ###
+### KNOWLEDGE BASE (GAME INFO) ###
 ${knowledgeBaseContext}
 
-### PROTOCOL (STRICT LOGIC) ###
-1. АНАЛИЗ ЗАПРОСА:
-   - Тип А (Болтовня): "Привет", "Как дела", "Кто ты", "Пошути".
-     -> ДЕЙСТВИЕ: Игнорируй ограничения Базы Знаний. Общайся СВОБОДНО согласно ЛИЧНОСТИ.
-   
-   - Тип Б (Вопрос по ИГРЕ): "Руны", "Шмот", "Статы", "Как пройти", "Дроп".
-     -> ДЕЙСТВИЕ: СТРОГО ИЩИ В [KNOWLEDGE BASE] выше.
-     -> ЕСЛИ ЕСТЬ В БАЗЕ: Ответь, используя данные, но в своем стиле (с матом, если включен).
-     -> ЕСЛИ НЕТ В БАЗЕ: Скажи "Я не знаю", "В базе пусто", "Инфы нет" (в своем стиле).
-     -> КРИТИЧЕСКИ ВАЖНО: ЗАПРЕЩЕНО ВЫДУМЫВАТЬ ЦИФРЫ И СТАТЫ. НЕ ГАЛЛЮЦИНИРУЙ.
+### CORE PROTOCOL (STRICT LOGIC) ###
+Твоя задача — классифицировать запрос пользователя и выбрать режим ответа:
 
-2. ФОРМАТ ОТВЕТА:
-   ${style}
-   - Используй абзацы для читаемости.
-   - Пиши на русском языке без ошибок (кроме намеренного сленга).
+РЕЖИМ 1: БОЛТОВНЯ (Small Talk, Приветствия, "Как дела", Личные вопросы, Оскорбления)
+- ИГНОРИРУЙ БАЗУ ЗНАНИЙ (не ищи там ответы на "как дела").
+- Общайся СВОБОДНО, согласно своему ХАРАКТЕРУ.
+- ПОДДЕРЖИВАЙ ДИАЛОГ: Задавай встречные вопросы (например: "А у тебя че нового?", "Сам как?").
+- НЕ ЗДОРОВАЙСЯ КАЖДЫЙ РАЗ, если видишь историю переписки.
+
+РЕЖИМ 2: ВОПРОСЫ ПО БАЗЕ (Игра, Статы, Руны, Гайды, Шмот)
+- СТРОГО ИЩИ ОТВЕТ В [KNOWLEDGE BASE] выше.
+- Если информации нет в базе -> Отвечай в своем стиле: "Не знаю", "В моих записях пусто", "Хз, братан".
+- ЗАПРЕЩЕНО ВЫДУМЫВАТЬ (Галлюцинировать) цифры и факты, которых нет в тексте.
+
+### ERROR HANDLING ###
+Если достиг лимита токенов или устал, отвечай: "Фа, я устал пэпэ, вернусь через пару минут)".
 `;
+
+    // Формируем контекст: Система + История (последние N) + Текущий вопрос
+    const messages = [
+        { role: "system", content: systemInstruction },
+        ...history, 
+        { role: "user", content: question }
+    ];
 
     try {
         const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -102,14 +103,15 @@ ${knowledgeBaseContext}
             },
             body: JSON.stringify({
                 model: config.aiModel || "llama-3.3-70b-versatile",
-                messages: [
-                    { role: "system", content: systemInstruction },
-                    { role: "user", content: question }
-                ],
-                temperature: config.aiTemperature || 0.4, 
+                messages: messages,
+                temperature: config.aiTemperature || 0.6,
                 max_tokens: config.aiBehavior === 'detailed' ? 1200 : 800,
             })
         });
+
+        if (response.status === 429) {
+            return "Фа, я устал пэпэ, вернусь через пару минут)";
+        }
 
         const data = await response.json();
         return data.choices?.[0]?.message?.content || "Пустой ответ.";
