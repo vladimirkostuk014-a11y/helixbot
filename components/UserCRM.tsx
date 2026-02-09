@@ -32,7 +32,7 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
 
     // AUDIO NOTIFICATION
     useEffect(() => {
-        const totalUnread = (Object.values(users) as User[]).reduce((acc, u) => acc + (u.unreadCount || 0), 0);
+        const totalUnread = Object.values(users).reduce((acc, u) => acc + (u.unreadCount || 0), 0);
         if (totalUnread > prevTotalUnreadRef.current) {
             const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
             audio.volume = 0.5;

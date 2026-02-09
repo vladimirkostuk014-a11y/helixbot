@@ -104,6 +104,7 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
                     setProgress(p => ({ ...p, sent: p.sent + 1 }));
                     
                     // --- SYNC WITH CRM HISTORY ---
+                    // Create message object
                     const newMsg: Message = {
                         dir: 'out',
                         text: text,
@@ -116,8 +117,10 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
                         user: 'Admin (Рассылка)'
                     };
                     
+                    // Update Firebase History for this user
                     const currentHistory = user.history || [];
                     const updatedHistory = [...currentHistory, newMsg].slice(-50);
+                    // Use saveData to push directly to Firebase
                     saveData(`users/${user.id}/history`, updatedHistory);
 
                     if (onBroadcastSent) {
@@ -136,9 +139,9 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
     };
 
     return (
-        <div className="flex flex-col lg:flex-row h-full gap-6">
+        <div className="flex h-full gap-6">
             {/* Left: Builder */}
-            <div className="w-full lg:w-1/2 flex flex-col bg-[#121214] border border-gray-800 rounded-2xl overflow-hidden shadow-xl">
+            <div className="w-1/2 flex flex-col bg-[#121214] border border-gray-800 rounded-2xl overflow-hidden shadow-xl">
                 <div className="p-5 border-b border-gray-800 bg-gradient-to-r from-gray-900 to-gray-800">
                     <h2 className="text-lg font-bold text-white flex items-center gap-2"><Icons.Edit2 size={18} className="text-blue-500"/> Конструктор сообщения</h2>
                 </div>
@@ -191,9 +194,9 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
             </div>
 
             {/* Right: Settings & Preview */}
-            <div className="w-full lg:w-1/2 flex flex-col gap-6">
+            <div className="w-1/2 flex flex-col gap-6">
                 {/* Audience List */}
-                <div className="bg-[#121214] border border-gray-800 rounded-2xl flex flex-col flex-1 shadow-xl overflow-hidden min-h-[300px]">
+                <div className="bg-[#121214] border border-gray-800 rounded-2xl flex flex-col flex-1 shadow-xl overflow-hidden">
                     <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/50">
                         <h3 className="text-sm font-bold text-gray-400 uppercase flex items-center gap-2"><Icons.Users size={16}/> Получатели ({targetUsers.length})</h3>
                         <div className="flex gap-2 text-xs">

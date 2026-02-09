@@ -18,7 +18,6 @@ export interface BotConfig {
     aiTemperature: number;
     aiMaxTokens: number;
     bannedWords: string;
-    jokes?: string; // Банк шуток
 }
 
 export interface User {
