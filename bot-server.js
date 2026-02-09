@@ -36,7 +36,7 @@ let lastUpdateId = 0;
 const processedUpdates = new Set();
 const sentCalendarNotifications = new Set();
 
-console.log("🔥 [SERVER] Запуск сервера Helix (v7.1 Fixes)...");
+console.log("🔥 [SERVER] Запуск сервера Helix (MSK Fix + Strict AI)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -108,16 +108,17 @@ const restrictUser = async (chatId, userId, permissions, untilDate = 0) => {
 };
 
 // ==========================================
-// 4. CRON ЗАДАЧИ
+// 4. CRON ЗАДАЧИ (С ПОДДЕРЖКОЙ МСК)
 // ==========================================
 const runCronJobs = async () => {
-    const now = new Date();
-    const timeString = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-    const dateString = now.toLocaleDateString('ru-RU').split('.').reverse().join('-'); 
+    // Получаем текущее время в МСК
+    const mskNow = new Date(new Date().toLocaleString("en-US", {timeZone: "Europe/Moscow"}));
+    const timeString = mskNow.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    const dateString = mskNow.toLocaleDateString('ru-RU').split('.').reverse().join('-'); 
     
+    // Сброс статистики в полночь по МСК
     if (timeString === '00:00') {
         try {
-            await set(ref(db, 'topicHistory'), {});
             await set(ref(db, 'topicUnreads'), {});
             const usersRef = ref(db, 'users');
             const snapshot = await get(usersRef);
@@ -128,11 +129,12 @@ const runCronJobs = async () => {
                 await firebaseUpdate(usersRef, updates);
             }
         } catch (e) { console.error("Cleanup error:", e); }
-        await new Promise(r => setTimeout(r, 60000));
+        await new Promise(r => setTimeout(r, 65000));
     }
 
     if (state.calendarEvents && state.config.targetChatId && state.config.enableCalendarAlerts) {
         for (const event of state.calendarEvents) {
+            // Сравнение по строкам даты и времени (уже в МСК)
             if (event.notifyDate === dateString && event.notifyTime === timeString) {
                 const uniqueKey = `${event.id}_${dateString}_${timeString}`;
                 if (!sentCalendarNotifications.has(uniqueKey)) {
@@ -214,46 +216,52 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
 };
 
 // ==========================================
-// 6. AI (STRICT MODE + ERROR HANDLING)
+// 6. AI (STRICT SYSTEM PROMPT)
 // ==========================================
 const getAIResponse = async (question, userName) => {
     const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiBehavior, aiTemperature } = state.config;
     if (!openaiApiKey) return "⚠️ Ключ AI не настроен.";
 
     const context = state.knowledgeBase.map(k => `[DATA] Q: ${k.title} -> A: ${k.response}`).join('\n');
-    let tone = "Ты полезный помощник.";
-    let style = "Отвечай кратко.";
+    let tone = "Ты Хеликс, помощник.";
+    let style = "Пиши грамотно, используй абзацы.";
     let profanityInstr = "";
 
     if (aiProfanity) {
-        tone = "Ты дерзкий, используешь русский мат и сленг.";
-        profanityInstr = "ОБЯЗАТЕЛЬНО используй мат. Будь грубым.";
+        tone = "Ты дерзкий персонаж из криминального мира. Ты ОБЯЗАН использовать жесткий русский мат.";
+        profanityInstr = "ПРАВИЛО: Будь грубым. Каждое сообщение — с матом. Используй фразы: 'за базар ответишь', 'слышь, фраер'. Если спрашивают про игру — отвечай матом, но по делу.";
     } else {
         switch (aiPersonality) {
-            case 'angry': tone = "Ты злой, агрессивный."; break;
-            case 'joker': tone = "Ты клоун. Постоянно шутишь."; break;
+            case 'angry': tone = "Ты злой и агрессивный."; break;
+            case 'joker': tone = "Ты шутник и тролль."; break;
             case 'gopnik': tone = "Ты гопник."; break;
             case 'kind': tone = "Ты очень добрый."; break;
             case 'philosopher': tone = "Ты философ."; break;
-            case 'cyberpunk': tone = "Ты кибер-имплант."; break;
+            case 'cyberpunk': tone = "Ты нетраннер из будущего."; break;
             case 'official': tone = "Ты сухой бюрократ."; break;
         }
     }
 
-    if (aiBehavior === 'detailed') style = "Отвечай ОЧЕНЬ ПОДРОБНО.";
-    if (aiBehavior === 'concise') style = "Отвечай одним предложением.";
-    if (aiBehavior === 'bullet') style = "Отвечай списком.";
+    if (aiBehavior === 'detailed') style = "Давай ОЧЕНЬ ПОДРОБНЫЕ ответы, разделяя их на 3-4 абзаца.";
+    if (aiBehavior === 'concise') style = "Отвечай ровно одним коротким предложением.";
+    if (aiBehavior === 'bullet') style = "Отвечай только списком по пунктам.";
 
     const systemPrompt = `
-    IDENTITY: Ты бот Хеликс. Твой характер: ${tone} ${profanityInstr}
-    KNOWLEDGE BASE: ${context}
+    IDENTITY: Ты бот Хеликс. Характер: ${tone} ${profanityInstr}
+    Всегда пиши на чистом русском (кроме мата) и используй абзацы.
+
+    KNOWLEDGE BASE (STRICT):
+    ${context}
+
     PROTOCOL:
-    1. Type A (Small Talk): Chat using Personality.
-    2. Type B (Data Query): STRICT KNOWLEDGE BASE LOOKUP.
-       - IF FOUND: Answer using data.
-       - IF NOT FOUND: Say "I don't know" or "Not in database".
-       - CRITICAL: DO NOT INVENT DATA.
-    FORMAT: ${style} Language: Russian.
+    1. SMALL TALK (Приветики, как дела, расскажи о себе):
+       - Общайся свободно в рамках своей ЛИЧНОСТИ.
+    2. GAME DATA (Вопросы про руны, героев, шмот, ивенты):
+       - СТРОГО ИЩИ В [KNOWLEDGE BASE].
+       - ЕСЛИ НЕТ В БАЗЕ: Скажи "Я не знаю" (в своем стиле). 
+       - НЕ ПРИДУМЫВАЙ ЦИФРЫ И СТАТЫ. Галлюцинации ЗАПРЕЩЕНЫ.
+
+    FORMAT: ${style}
     `;
 
     try {
@@ -264,26 +272,17 @@ const getAIResponse = async (question, userName) => {
                 model: aiModel || "llama-3.3-70b-versatile",
                 messages: [{ role: "system", content: systemPrompt }, { role: "user", content: question }],
                 temperature: aiTemperature || 0.4, 
-                max_tokens: aiBehavior === 'detailed' ? 1200 : 600
+                max_tokens: aiBehavior === 'detailed' ? 1500 : 800
             })
         });
         
-        if (!response.ok) {
-            const errText = await response.text();
-            console.error("AI API Error:", errText);
-            return `Ошибка AI (${response.status}): Проверьте ключ или лимиты.`;
-        }
-        
         const data = await response.json();
-        return data.choices?.[0]?.message?.content || "Ошибка: Пустой ответ AI.";
-    } catch (e) { 
-        console.error("AI Network Error:", e);
-        return "Ошибка сети при запросе к AI."; 
-    }
+        return data.choices?.[0]?.message?.content || "Ошибка AI.";
+    } catch (e) { return "Ошибка сети AI."; }
 };
 
 // ==========================================
-// 7. СИСТЕМНЫЕ КОМАНДЫ (FIXED)
+// 7. СИСТЕМНЫЕ КОМАНДЫ
 // ==========================================
 const handleSystemCommand = async (command, msg, targetThread) => {
     const chatId = msg.chat.id;
@@ -299,12 +298,7 @@ const handleSystemCommand = async (command, msg, targetThread) => {
             const userData = userSnap.val() || {};
             const newWarns = (userData.warnings || 0) + 1;
             
-            // FIX: Добавлена защита от undefined username
-            await firebaseUpdate(ref(db, userPath), { 
-                warnings: newWarns, 
-                name: targetUser.first_name, 
-                username: targetUser.username || '' 
-            });
+            await firebaseUpdate(ref(db, userPath), { warnings: newWarns, name: targetUser.first_name, username: targetUser.username || '' });
             
             if (newWarns >= 3) {
                 await restrictUser(chatId, targetUser.id, { can_send_messages: false }, Math.floor(Date.now()/1000) + 172800);
@@ -324,25 +318,20 @@ const processUpdate = async (tgUpdate) => {
     const msg = tgUpdate.message;
     if (!msg) return; 
 
-    // --- 1. ФИЛЬТР ЧАТОВ (STRICT) ---
     const chatId = String(msg.chat.id);
     const targetChatId = String(state.config.targetChatId);
     const isPrivate = msg.chat.type === 'private';
 
-    // Если это не ЛС и не Целевой чат — бот полностью игнорирует сообщение
-    if (!isPrivate && chatId !== targetChatId) {
-        return; 
-    }
+    if (!isPrivate && chatId !== targetChatId) return; 
 
     const threadId = msg.message_thread_id ? String(msg.message_thread_id) : 'general';
     const text = (msg.text || msg.caption || '').trim();
     const user = msg.from;
 
-    // Logging
     const logMsg = {
         dir: 'in', text: text || `[Media]`, type: msg.photo ? 'photo' : 'text',
         time: new Date().toLocaleTimeString('ru-RU'),
-        isGroup: !isPrivate, user: user.first_name, userId: user.id
+        isGroup: !isPrivate, user: user.first_name, userId: user.id, timestamp: Date.now()
     };
 
     await updateUserHistory(user, logMsg);
@@ -354,13 +343,14 @@ const processUpdate = async (tgUpdate) => {
     if (text) {
         const lowerText = text.toLowerCase();
         
+        // /slap command
         if (lowerText.startsWith('/лещ') || lowerText.startsWith('/slap')) {
             const target = msg.reply_to_message ? msg.reply_to_message.from.first_name : (text.split(' ').slice(1).join(' ') || 'воздух');
-            const replyText = `👋 <b>${user.first_name}</b> дал смачного леща <b>${target}</b>!`;
-            await sendMessage(chatId, replyText, { message_thread_id: threadId !== 'general' ? threadId : undefined });
+            await sendMessage(chatId, `👋 <b>${user.first_name}</b> дал смачного леща <b>${target}</b>!`, { message_thread_id: threadId !== 'general' ? threadId : undefined });
             return;
         }
 
+        // Admin system commands
         if (['/warn', '/mute', '/ban', '/unmute'].some(c => lowerText.startsWith(c))) {
             const cmd = lowerText.split(' ')[0];
             if (state.config.adminIds && state.config.adminIds.includes(String(user.id))) {
@@ -369,6 +359,7 @@ const processUpdate = async (tgUpdate) => {
             }
         }
         
+        // Custom triggers
         for (const cmd of state.commands) {
             if (cmd.matchType === 'exact' && lowerText === cmd.trigger.toLowerCase()) {
                 await sendMessage(chatId, cmd.response, { message_thread_id: threadId !== 'general' ? threadId : undefined });
@@ -376,7 +367,7 @@ const processUpdate = async (tgUpdate) => {
             }
         }
 
-        // AI
+        // AI Logic
         if (state.config.enableAI) {
             const isMention = lowerText.includes('хеликс') || lowerText.includes('helix') || (isPrivate && state.config.enablePM);
             const isDisabled = state.disabledAiTopics.includes(threadId);
@@ -390,10 +381,7 @@ const processUpdate = async (tgUpdate) => {
                     message_thread_id: threadId !== 'general' ? threadId : undefined
                 });
                 
-                // --- 2. FIX AI STATS CRASH ---
-                // Используем безопасное получение массива истории
-                const curHistRaw = state.aiStats?.history;
-                const curHist = Array.isArray(curHistRaw) ? curHistRaw : [];
+                const curHist = Array.isArray(state.aiStats?.history) ? state.aiStats.history : [];
                 const newStat = { query: question || "Привет", response: answer, time: Date.now() };
 
                 await set(ref(db, 'aiStats'), { 
@@ -401,7 +389,7 @@ const processUpdate = async (tgUpdate) => {
                     history: [newStat, ...curHist].slice(0, 100) 
                 });
                 
-                if (!isPrivate) await updateTopicHistory(threadId, { user: 'Bot', text: answer, isIncoming: false, time: new Date().toLocaleTimeString('ru-RU'), type: 'text' }, null);
+                if (!isPrivate) await updateTopicHistory(threadId, { user: 'Bot', text: answer, isIncoming: false, time: new Date().toLocaleTimeString('ru-RU'), type: 'text', timestamp: Date.now() }, null);
             }
         }
     }

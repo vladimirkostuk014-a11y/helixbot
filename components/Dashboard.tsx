@@ -77,7 +77,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         const report = `📊 <b>ТОП-10 Вопросов Хеликсу:</b>\n\n` + 
                        top.map((t, i) => `${i+1}. ${t.query} (${t.count})`).join('\n');
                        
-        const admins = Object.values(users).filter(u => u.role === 'admin');
+        // Use typed userArray to avoid 'unknown' type error
+        const admins = userArray.filter(u => u.role === 'admin');
         let sentCount = 0;
         
         for (const admin of admins) {
@@ -266,11 +267,9 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
 
     return (
         <div className="space-y-8 relative">
-            {/* ... (Active Users Modal & Groups Modal - same as previous, omitted for brevity) ... */}
-            {/* Keep existing modals code here, just ensuring structure is valid */}
+            {/* ... (Active Users Modal & Groups Modal) ... */}
             {showActiveModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowActiveModal(false)}>
-                    {/* ... Active Users Modal Content ... */}
                     <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl p-6 animate-slideIn" onClick={e => e.stopPropagation()}>
                          <div className="flex justify-between items-center mb-6">
                             <h3 className="text-lg font-bold text-white flex items-center gap-2"><Icons.Activity size={20} className="text-green-500"/> Активность</h3>
@@ -297,7 +296,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                             <button onClick={() => setShowGroupModal(false)}><Icons.X size={20} className="text-gray-500 hover:text-white"/></button>
                         </div>
                         <div className="max-h-[500px] overflow-y-auto custom-scrollbar space-y-3">
-                            {Object.values(groups).map((g) => (
+                            {/* Explicitly cast to Group[] to avoid 'unknown' type error */}
+                            {(Object.values(groups) as Group[]).map((g) => (
                                 <div key={g.id} className="flex items-center justify-between p-4 bg-gray-900 rounded-lg border border-gray-800">
                                     <div className="text-white font-bold">{g.title}</div>
                                     <div className="flex gap-2">
