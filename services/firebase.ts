@@ -60,10 +60,10 @@ export const saveData = async (path: string, data: any) => {
 export const subscribeToData = (path: string, callback: (data: any) => void) => {
     const dbRef = ref(db, path);
     
-    const unsubscribe = onValue(dbRef, (snapshot) => {
+    const unsubscribe = onValue(dbRef, (snapshot: any) => {
         const val = snapshot.val();
         callback(val);
-    }, (error) => {
+    }, (error: any) => {
         console.error(`[Firebase] Subscription error for ${path}:`, error);
     });
 
