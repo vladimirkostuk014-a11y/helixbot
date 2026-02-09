@@ -36,7 +36,7 @@ let lastUpdateId = 0;
 const processedUpdates = new Set();
 const sentCalendarNotifications = new Set();
 
-console.log("🔥 [SERVER] Запуск сервера Helix (v8.0 Anti-Hallucination)...");
+console.log("🔥 [SERVER] Запуск сервера Helix (v9.0 Optimized)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -225,13 +225,13 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
 };
 
 // ==========================================
-// 6. AI (STRICT MODE + ERROR HANDLING)
+// 6. AI (STRICT MODE + GRAMMAR FIX + LENGTH FIX)
 // ==========================================
 const getAIResponse = async (question, userName) => {
     const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiBehavior, aiTemperature, customProfanity } = state.config;
     if (!openaiApiKey) return "⚠️ Ключ AI не настроен.";
 
-    const context = state.knowledgeBase.map(k => `[DATA] Q: ${k.title} -> A: ${k.response}`).join('\n');
+    const context = state.knowledgeBase.map(k => `[INFO] Q: ${k.title} -> A: ${k.response}`).join('\n');
     
     // Identity Construction
     let identity = "Ты полезный помощник Хеликс.";
@@ -249,25 +249,38 @@ const getAIResponse = async (question, userName) => {
         ? `ОБЯЗАТЕЛЬНО используй мат в стиле своей личности.${customProfanity ? ' Используй также: ' + customProfanity : ''}` 
         : "Мат запрещен.";
 
+    // Logic to enforce length via tokens AND system prompt
     let style = "Отвечай 2-3 предложениями.";
-    if (aiBehavior === 'concise') style = "Отвечай 1 предложением.";
-    if (aiBehavior === 'detailed') style = "Отвечай подробно, абзацами.";
-    if (aiBehavior === 'bullet') style = "Используй списки.";
+    let maxTokens = 600;
+
+    if (aiBehavior === 'concise') {
+        style = "Отвечай МАКСИМАЛЬНО КОРОТКО. Только 1 предложение.";
+        maxTokens = 150;
+    }
+    if (aiBehavior === 'detailed') {
+        style = "Отвечай подробно, используй абзацы и списки. Развернутый ответ.";
+        maxTokens = 1500;
+    }
+    if (aiBehavior === 'bullet') {
+        style = "Отвечай только маркированным списком по пунктам.";
+        maxTokens = 800;
+    }
 
     const systemPrompt = `
-    IDENTITY: ${identity}
+    ROLE: ${identity}
     ${profanityInstr}
-    STYLE: ${style} Use Russian language. Format nicely with paragraphs.
     
-    KNOWLEDGE BASE:
+    CRITICAL INSTRUCTIONS:
+    1. LANGUAGE: Use PERFECT RUSSIAN grammar. No spelling errors.
+    2. LENGTH/STYLE: ${style}
+    
+    KNOWLEDGE BASE (CONTEXT):
     ${context}
 
-    PROTOCOL:
-    1. CLASSIFY: Is it Small Talk ("Hi", "How are you") or Data Query?
-    2. IF SMALL TALK: Chat freely using personality.
-    3. IF DATA QUERY: CHECK KNOWLEDGE BASE STRICTLY.
-       - FOUND? Answer with data.
-       - NOT FOUND? Say "I don't know" (in character). DO NOT INVENT FACTS.
+    STRICT RULES:
+    - IF the answer is found in the KNOWLEDGE BASE, use it.
+    - IF the answer is NOT in the KNOWLEDGE BASE, you MUST say "Я не знаю" (or similar in your personality). 
+    - DO NOT INVENT FACTS. DO NOT HALLUCINATE.
     `;
 
     try {
@@ -278,7 +291,7 @@ const getAIResponse = async (question, userName) => {
                 model: aiModel || "llama-3.3-70b-versatile",
                 messages: [{ role: "system", content: systemPrompt }, { role: "user", content: question }],
                 temperature: aiTemperature || 0.4, 
-                max_tokens: aiBehavior === 'detailed' ? 1200 : 600
+                max_tokens: maxTokens
             })
         });
         
@@ -304,7 +317,7 @@ const getAIResponse = async (question, userName) => {
 // ==========================================
 // 7. СИСТЕМНЫЕ КОМАНДЫ (FIXED)
 // ==========================================
-const handleSystemCommand = async (command, msg, targetThread) => {
+const handleSystemCommand = async (command, msg, threadId) => {
     const chatId = msg.chat.id;
     const reply = msg.reply_to_message;
     
@@ -327,9 +340,9 @@ const handleSystemCommand = async (command, msg, targetThread) => {
             if (newWarns >= 3) {
                 await restrictUser(chatId, targetUser.id, { can_send_messages: false }, Math.floor(Date.now()/1000) + 172800);
                 await firebaseUpdate(ref(db, userPath), { warnings: 0, status: 'muted' });
-                return sendMessage(chatId, `🛑 <b>${targetUser.first_name}</b> получил 3/3 варнов и заглушен на 48 часов.`, { message_thread_id: targetThread });
+                return sendMessage(chatId, `🛑 <b>${targetUser.first_name}</b> получил 3/3 варнов и заглушен на 48 часов.`, { message_thread_id: threadId });
             } else {
-                return sendMessage(chatId, `⚠️ <b>${targetUser.first_name}</b>, предупреждение (${newWarns}/3).`, { message_thread_id: targetThread });
+                return sendMessage(chatId, `⚠️ <b>${targetUser.first_name}</b>, предупреждение (${newWarns}/3).`, { message_thread_id: threadId });
             }
         }
     }
@@ -342,7 +355,6 @@ const processUpdate = async (tgUpdate) => {
     const msg = tgUpdate.message;
     if (!msg) return; 
 
-    // --- 1. ФИЛЬТР ЧАТОВ (STRICT) ---
     const chatId = String(msg.chat.id);
     const targetChatId = String(state.config.targetChatId);
     const isPrivate = msg.chat.type === 'private';
@@ -355,7 +367,6 @@ const processUpdate = async (tgUpdate) => {
     const text = (msg.text || msg.caption || '').trim();
     const user = msg.from;
 
-    // Logging
     const logMsg = {
         dir: 'in', text: text || `[Media]`, type: msg.photo ? 'photo' : 'text',
         time: new Date().toLocaleTimeString('ru-RU'),
@@ -371,9 +382,49 @@ const processUpdate = async (tgUpdate) => {
     if (text) {
         const lowerText = text.toLowerCase();
         
+        // --- COMMANDS PROCESSING (DYNAMIC) ---
+        // Checks if message matches any command in Database
+        for (const cmd of state.commands) {
+            if (cmd.matchType === 'exact' && lowerText === cmd.trigger.toLowerCase()) {
+                // Handle Placeholders: {user} and {target}
+                let responseText = cmd.response;
+                
+                // Determine target name if needed
+                let targetName = "воздух";
+                if (msg.reply_to_message && msg.reply_to_message.from) {
+                    targetName = msg.reply_to_message.from.first_name;
+                } else {
+                    const parts = text.split(' ');
+                    if (parts.length > 1) {
+                        targetName = parts.slice(1).join(' ').replace('@', '');
+                    }
+                }
+                
+                responseText = responseText.replace(/{user}/g, user.first_name)
+                                           .replace(/{target}/g, targetName);
+
+                await sendMessage(chatId, responseText, { message_thread_id: threadId !== 'general' ? threadId : undefined });
+                return;
+            }
+        }
+
+        // --- HARDCODED FALLBACK FOR /SLAP IF NOT IN DB ---
+        // This fixes the "Group!" issue immediately even if user hasn't added command to DB
         if (lowerText.startsWith('/лещ') || lowerText.startsWith('/slap')) {
-            const target = msg.reply_to_message ? msg.reply_to_message.from.first_name : (text.split(' ').slice(1).join(' ') || 'воздух');
-            const replyText = `👋 <b>${user.first_name}</b> дал смачного леща <b>${target}</b>!`;
+            let targetName = "воздух";
+            
+            if (msg.reply_to_message && msg.reply_to_message.from) {
+                targetName = msg.reply_to_message.from.first_name;
+            } else {
+                const parts = text.split(' ');
+                if (parts.length > 1) {
+                    targetName = parts.slice(1).join(' ').replace('@', '');
+                }
+            }
+            // Filter out accidental group titles or empty
+            if (!targetName || targetName === "Group") targetName = "чат"; 
+
+            const replyText = `👋 <b>${user.first_name}</b> отвесил смачного леща <b>${targetName}</b>!`;
             await sendMessage(chatId, replyText, { message_thread_id: threadId !== 'general' ? threadId : undefined });
             return;
         }
@@ -385,15 +436,8 @@ const processUpdate = async (tgUpdate) => {
                 return;
             }
         }
-        
-        for (const cmd of state.commands) {
-            if (cmd.matchType === 'exact' && lowerText === cmd.trigger.toLowerCase()) {
-                await sendMessage(chatId, cmd.response, { message_thread_id: threadId !== 'general' ? threadId : undefined });
-                return;
-            }
-        }
 
-        // AI
+        // AI RESPONSE
         if (state.config.enableAI) {
             const isMention = lowerText.includes('хеликс') || lowerText.includes('helix') || (isPrivate && state.config.enablePM);
             const isDisabled = state.disabledAiTopics.includes(threadId);

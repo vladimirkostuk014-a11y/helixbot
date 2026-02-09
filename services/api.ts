@@ -39,9 +39,6 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
 
     // --- 1. ПЕРСОНАЛИЗАЦИЯ (PERSONALITY) ---
     let identity = "Ты полезный и вежливый помощник Хеликс.";
-    let styleInstruction = "Отвечай по существу.";
-    
-    // Определяем личность
     switch (config.aiPersonality) {
         case 'angry': 
             identity = "Ты злой, токсичный и агрессивный бот. Тебя все раздражают. Ты грубишь."; 
@@ -68,7 +65,6 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
             identity = "Ты Хеликс, дружелюбный и полезный помощник игрового сообщества.";
     }
 
-    // Режим мата (Profanity)
     let profanityInstr = "";
     if (config.aiProfanity) {
         profanityInstr = `ВАЖНО: Ты ОБЯЗАН использовать нецензурную лексику (мат) в своем стиле (${config.aiPersonality}). Не сдерживайся.`;
@@ -81,9 +77,20 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
 
     // Стиль (Длина ответа)
     let lengthInstr = "Отвечай средним объемом (2-3 предложения).";
-    if (config.aiBehavior === 'concise') lengthInstr = "Отвечай ОЧЕНЬ кратко. Максимум 1 предложение.";
-    if (config.aiBehavior === 'detailed') lengthInstr = "Отвечай подробно, развернуто. Используй абзацы. Расписывай детали.";
-    if (config.aiBehavior === 'bullet') lengthInstr = "Если перечисляешь факты, используй маркированный список.";
+    let maxTokens = 600;
+
+    if (config.aiBehavior === 'concise') {
+        lengthInstr = "Отвечай ОЧЕНЬ кратко. Максимум 1 предложение.";
+        maxTokens = 150;
+    }
+    if (config.aiBehavior === 'detailed') {
+        lengthInstr = "Отвечай подробно, развернуто. Используй абзацы. Расписывай детали.";
+        maxTokens = 1500;
+    }
+    if (config.aiBehavior === 'bullet') {
+        lengthInstr = "Если перечисляешь факты, используй маркированный список.";
+        maxTokens = 800;
+    }
 
     // --- 2. СИСТЕМНЫЙ ПРОМПТ (STRICT INSTRUCTIONS) ---
     const systemInstruction = `
@@ -92,7 +99,7 @@ ${identity}
 ${profanityInstr}
 
 ### LANGUAGE & FORMATTING ###
-- Language: Russian (Русский).
+- Language: PERFECT RUSSIAN (Русский). No grammatical errors.
 - Formatting: Используй красивые абзацы. Делай отступы. Используй жирный шрифт для акцентов.
 - ${lengthInstr}
 
@@ -103,18 +110,15 @@ ${knowledgeBaseContext}
 Ты должен сначала классифицировать запрос пользователя:
 
 1. **ТИП А: ОБЩЕНИЕ (Small Talk)** 
-   (Примеры: "Привет", "Как дела?", "Расскажи шутку", "Кто ты?", "Пошли нафиг")
-   -> ДЕЙСТВИЕ: Отвечай свободно, используя свою Личность (${config.aiPersonality}). Здесь база знаний не нужна. Поддерживай диалог.
+   (Примеры: "Привет", "Как дела?", "Расскажи шутку", "Кто ты?")
+   -> ДЕЙСТВИЕ: Отвечай свободно, используя свою Личность (${config.aiPersonality}).
 
 2. **ТИП Б: ЗАПРОС ИНФОРМАЦИИ (Data Query)**
    (Примеры: "Какие статы у брони?", "Где фармить руны?", "Как победить босса?", "Дроп рейт")
    -> ДЕЙСТВИЕ: СТРОГО ПРОВЕРЬ РАЗДЕЛ [KNOWLEDGE BASE] ВЫШЕ.
-   - ЕСЛИ ИНФОРМАЦИЯ ЕСТЬ: Ответь, используя данные, в стиле своей Личности.
+   - ЕСЛИ ИНФОРМАЦИЯ ЕСТЬ: Ответь, используя данные.
    - ЕСЛИ ИНФОРМАЦИИ НЕТ: Ты ОБЯЗАН ответить "Я не знаю", "У меня нет такой инфы" или "В базе пусто" (в стиле своего персонажа).
    - ЗАПРЕТ: НЕ ВЫДУМЫВАЙ ФАКТЫ. НЕ ГАЛЛЮЦИНИРУЙ. Если данных нет в тексте выше — не придумывай их.
-
-### GOAL ###
-Быть полезным (или бесполезным, в зависимости от личности), но НИКОГДА не врать про игровые данные.
 `;
 
     try {
@@ -131,15 +135,13 @@ ${knowledgeBaseContext}
                     { role: "user", content: question }
                 ],
                 temperature: config.aiTemperature || 0.4, 
-                max_tokens: config.aiBehavior === 'detailed' ? 1200 : 800,
+                max_tokens: maxTokens,
             })
         });
 
         if (response.status === 429) {
-            // Rate Limit Error - Personality based response
             if (config.aiPersonality === 'gopnik') return "Э, тормози! Я перегрелся. Дай перекурить.";
             if (config.aiPersonality === 'official') return "Превышен лимит запросов. Пожалуйста, ожидайте.";
-            if (config.aiPersonality === 'angry') return "Да отвалите вы! Слишком много вопросов! Я устал!";
             return "Слишком много запросов. Дайте мне передохнуть минуту.";
         }
 

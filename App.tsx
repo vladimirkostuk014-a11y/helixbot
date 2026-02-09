@@ -13,6 +13,9 @@ import { apiCall } from './services/api';
 import UserCRM from './components/UserCRM';
 import { subscribeToData, saveData, removeData } from './services/firebase'; 
 
+// Encrypted Password: 88005553535 -> Base64
+const SECURE_HASH = "ODgwMDU1NTM1MzU=";
+
 const HARDCODED_CONFIG = {
     token: '7614990025:AAEGbRiUO3zPR1VFhwTPgQ4eHVX-eo5snPI',
     targetChatId: '-1003724305882',
@@ -28,6 +31,11 @@ const toArray = <T,>(data: any): T[] => {
 };
 
 const App = () => {
+    // Auth State
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
+    const [passwordInput, setPasswordInput] = useState('');
+    const [authError, setAuthError] = useState(false);
+
     const [activeTab, setActiveTab] = useState('dashboard');
     const [isBotActive, setIsBotActive] = useState(true); 
     const [lastHeartbeat, setLastHeartbeat] = useState(0);
@@ -79,8 +87,35 @@ const App = () => {
     const markLoaded = (section: string) => setLoadedSections(prev => new Set(prev).add(section));
     const canSave = (section: string) => loadedSections.has(section);
 
+    // Auth Check on Mount
+    useEffect(() => {
+        const savedAuth = localStorage.getItem('helix_auth_token');
+        if (savedAuth === SECURE_HASH) {
+            setIsAuthenticated(true);
+        }
+    }, []);
+
+    const handleLogin = (e: React.FormEvent) => {
+        e.preventDefault();
+        // Simple base64 encoding of input to check against hash
+        try {
+            const inputHash = btoa(passwordInput);
+            if (inputHash === SECURE_HASH) {
+                setIsAuthenticated(true);
+                localStorage.setItem('helix_auth_token', SECURE_HASH);
+                setAuthError(false);
+            } else {
+                setAuthError(true);
+            }
+        } catch (e) {
+            setAuthError(true);
+        }
+    };
+
     // --- FIREBASE SUBSCRIPTIONS ---
     useEffect(() => {
+        if (!isAuthenticated) return; // Only subscribe if authenticated
+
         const unsubs: (Function | undefined)[] = [];
         const sub = (path: string, cb: (val: any) => void) => {
             const unsub = subscribeToData(path, cb);
@@ -126,7 +161,7 @@ const App = () => {
         sub('calendarCategories', (val) => { if(val) setCalendarCategories(toArray(val)); markLoaded('calendarCategories'); });
 
         return () => unsubs.forEach(fn => fn && fn());
-    }, []);
+    }, [isAuthenticated]);
 
     // --- AUTO-SAVE (Front -> Firebase) ---
     useEffect(() => { if (canSave('config')) saveData('config', config); }, [config, loadedSections]);
@@ -187,6 +222,37 @@ const App = () => {
         setGroups(newGroups);
         saveData('groups', newGroups);
         addLog('Группы', `Группа ${groupId} удалена`, 'danger');
+    };
+
+    // FIXED: Unread Sync Logic
+    const handleMarkTopicRead = (tid: string) => {
+        // 1. Reset Topic Unreads
+        setTopicUnreads(prev => ({...prev, [tid]: 0}));
+        saveData(`topicUnreads/${tid}`, 0);
+
+        // 2. Reset Individual User Unreads for users in this topic
+        // We find users who have sent messages in this topic's history
+        const topicMsgs = topicHistory[tid] || [];
+        const userIdsInTopic = new Set<number>();
+        topicMsgs.forEach(msg => {
+            if (msg.userId && msg.isIncoming) userIdsInTopic.add(msg.userId);
+        });
+
+        const updatedUsers = { ...users };
+        let hasChanges = false;
+        
+        userIdsInTopic.forEach(uid => {
+            const user = updatedUsers[uid];
+            if (user && user.unreadCount && user.unreadCount > 0) {
+                updatedUsers[uid] = { ...user, unreadCount: 0 };
+                saveData(`users/${uid}/unreadCount`, 0);
+                hasChanges = true;
+            }
+        });
+
+        if (hasChanges) {
+            setUsers(updatedUsers);
+        }
     };
 
     const handleLiveChatSend = async (data: { text: string; mediaUrl?: string; mediaFile?: File | null; buttons?: any[]; topicId: string }) => {
@@ -250,6 +316,40 @@ const App = () => {
     // Calculate Uptime (90s threshold)
     const isOnline = (Date.now() - lastHeartbeat) < 90000; 
 
+    // Login Screen
+    if (!isAuthenticated) {
+        return (
+            <div className="flex h-screen bg-[#09090b] items-center justify-center p-4">
+                <div className="w-full max-w-sm bg-[#121214] border border-gray-800 rounded-2xl shadow-2xl p-8 animate-slideIn">
+                    <div className="flex justify-center mb-6">
+                        <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center shadow-lg text-white">
+                            <Icons.Shield size={32} />
+                        </div>
+                    </div>
+                    <h2 className="text-2xl font-bold text-center text-white mb-2">Helix Admin</h2>
+                    <p className="text-gray-500 text-center text-sm mb-6">Введите код доступа</p>
+                    
+                    <form onSubmit={handleLogin} className="space-y-4">
+                        <div className="relative">
+                            <input 
+                                type="password" 
+                                value={passwordInput}
+                                onChange={(e) => setPasswordInput(e.target.value)}
+                                className={`w-full bg-black border ${authError ? 'border-red-500' : 'border-gray-700'} rounded-xl px-4 py-3 text-white text-center tracking-widest outline-none focus:border-blue-500 transition-colors`}
+                                placeholder="••••••••"
+                                autoFocus
+                            />
+                        </div>
+                        {authError && <div className="text-red-500 text-xs text-center font-bold">Неверный пароль</div>}
+                        <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors shadow-lg">
+                            Войти
+                        </button>
+                    </form>
+                </div>
+            </div>
+        );
+    }
+
     const TabButton = ({ id, iconKey, label, badge }: any) => {
         const isActive = activeTab === id; const Icon = Icons[iconKey as keyof typeof Icons];
         return ( 
@@ -298,7 +398,7 @@ const App = () => {
                         </div>
                         <div>
                             <h1 className="text-xl font-bold text-white tracking-tight">Бот Helix</h1>
-                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v2.4</span>
+                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v3.0</span>
                         </div>
                     </div>
                 </div>
@@ -308,7 +408,7 @@ const App = () => {
                     <button onClick={() => setIsSidebarOpen(false)}><Icons.X size={24}/></button>
                 </div>
                 
-                {/* Status Box (Visible in Sidebar) */}
+                {/* Status Box */}
                 <div className="px-6 mb-4">
                      <div className="bg-black/40 rounded-lg p-3 border border-gray-800/50 space-y-2">
                         <div className="flex items-center justify-between">
@@ -348,6 +448,14 @@ const App = () => {
                             {isBotActive ? <><Icons.Pause size={14}/> Поставить на Паузу</> : <><Icons.Play size={14}/> Активировать Бота</>}
                         </span>
                     </button>
+                    <div className="mt-2 text-center">
+                        <button 
+                            onClick={() => { localStorage.removeItem('helix_auth_token'); setIsAuthenticated(false); }}
+                            className="text-[10px] text-gray-500 hover:text-white underline"
+                        >
+                            Выйти из системы
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -369,8 +477,7 @@ const App = () => {
                                 setTopicHistory(h); 
                                 saveData('topicHistory', h);
                                 // FORCE CLEAR UNREADS
-                                setTopicUnreads(prev => ({...prev, [tid]: 0}));
-                                saveData(`topicUnreads/${tid}`, 0);
+                                handleMarkTopicRead(tid);
                             }} 
                             onRenameTopic={(id, name) => { const n = {...topicNames, [id]: name}; setTopicNames(n); saveData('topicNames', n); }} 
                             quickReplies={quickReplies} 
@@ -385,10 +492,7 @@ const App = () => {
                                 addLog('LiveChat', `Тема ${id} удалена`, 'danger');
                                 if (activeTopic === id) setActiveTopic('general');
                             }}
-                            onMarkTopicRead={(id) => {
-                                setTopicUnreads(prev => ({...prev, [id]: 0}));
-                                saveData(`topicUnreads/${id}`, 0);
-                            }}
+                            onMarkTopicRead={handleMarkTopicRead}
                         />}
                         
                         {activeTab === 'users' && <UserCRM users={users} setUsers={setUsers} config={config} commands={commands} topicNames={topicNames} addLog={addLog} />}
