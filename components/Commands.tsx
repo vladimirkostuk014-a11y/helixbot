@@ -55,23 +55,6 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
         setIsEditing(false);
     };
 
-    const addButton = () => {
-        if (!buttonDraft.text) return;
-        setCurrentCmd({ ...currentCmd, buttons: [...(currentCmd.buttons || []), buttonDraft] });
-        setButtonDraft({ text: '', url: '' });
-    };
-
-    const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (file) {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                setCurrentCmd({ ...currentCmd, mediaUrl: reader.result as string });
-            };
-            reader.readAsDataURL(file);
-        }
-    };
-
     const toggleRole = (role: 'user' | 'admin') => {
         const currentRoles = currentCmd.allowedRoles || ['user', 'admin'];
         if (currentRoles.includes(role)) {
@@ -81,7 +64,6 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
         }
     };
 
-    // Sort System Commands by Color Name
     const systemCmds = commands
         .filter(c => c.isSystem)
         .sort((a, b) => (a.color || 'Default').localeCompare(b.color || 'Default'));
@@ -94,8 +76,8 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
     };
 
     return (
-        <div className="flex gap-6 h-full">
-            <div className="w-1/3 bg-gray-800/30 border border-gray-700 rounded-xl overflow-hidden flex flex-col">
+        <div className="flex flex-col lg:flex-row gap-6 h-full">
+            <div className="w-full lg:w-1/3 bg-gray-800/30 border border-gray-700 rounded-xl overflow-hidden flex flex-col h-[300px] lg:h-full">
                 <div className="p-4 border-b border-gray-700 flex justify-between items-center bg-gray-900/50">
                     <span className="font-medium text-white flex items-center gap-2"><Icons.Terminal size={18}/> Команды</span>
                     <button onClick={() => { setIsEditing(true); setCurrentCmd({ trigger: '/', matchType: 'exact', buttons: [], allowedRoles: ['user', 'admin'] }); }} className="p-1.5 text-gray-400 hover:text-white bg-gray-800 rounded-md"><Icons.Plus size={18}/></button>
@@ -128,8 +110,7 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
                 </div>
             </div>
             
-            {/* Same Edit Form as before */}
-            <div className="w-2/3 bg-gray-800/30 border border-gray-700 rounded-xl p-6 overflow-y-auto custom-scrollbar">
+            <div className="w-full lg:w-2/3 bg-gray-800/30 border border-gray-700 rounded-xl p-6 overflow-y-auto custom-scrollbar">
                 {isEditing ? (
                     <div className="space-y-5">
                         <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
@@ -137,7 +118,7 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
                             {currentCmd.isSystem && <span className="text-xs bg-yellow-600 px-2 py-0.5 rounded text-black font-bold">SYSTEM</span>}
                         </h3>
                         
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label className="text-xs text-gray-500 uppercase font-bold block mb-1">Триггер</label>
                                 <input disabled={currentCmd.isSystem} value={currentCmd.trigger} onChange={e => setCurrentCmd({...currentCmd, trigger: e.target.value})} className={`w-full bg-gray-900 border border-gray-600 rounded p-2.5 text-white ${currentCmd.isSystem ? 'opacity-50 cursor-not-allowed' : ''}`} placeholder="/start"/>
@@ -214,8 +195,6 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
                             <label className="text-xs text-gray-500 uppercase font-bold block mb-1">Ответ бота</label>
                             <textarea rows={4} value={currentCmd.response} onChange={e => setCurrentCmd({...currentCmd, response: e.target.value})} className="w-full bg-gray-900 border border-gray-600 rounded-xl p-3 text-white font-mono text-sm" placeholder="Текст ответа... (поддерживает {name})" />
                         </div>
-
-                        {/* Media & Buttons Omitted for brevity (same as previous) */}
                         
                         <div className="flex justify-end gap-3 pt-4">
                             {currentCmd.id && !currentCmd.isSystem && <button onClick={() => handleDelete(currentCmd.id!)} className="text-red-400 px-4 py-2 hover:bg-red-900/20 rounded font-bold">Удалить</button>}
@@ -223,7 +202,7 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
                         </div>
                     </div>
                 ) : (
-                    <div className="flex items-center justify-center h-full text-gray-500 bg-gray-900/10 rounded-xl border border-dashed border-gray-700">
+                    <div className="flex items-center justify-center h-full text-gray-500 bg-gray-900/10 rounded-xl border border-dashed border-gray-700 min-h-[300px]">
                         <div className="text-center">
                             <Icons.Terminal size={48} className="mx-auto mb-3 opacity-30"/>
                             <p>Выберите команду для настройки</p>

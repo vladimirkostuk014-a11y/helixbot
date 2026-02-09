@@ -32,6 +32,7 @@ const App = () => {
     const [isBotActive, setIsBotActive] = useState(true); 
     const [lastHeartbeat, setLastHeartbeat] = useState(0);
     const [loadedSections, setLoadedSections] = useState<Set<string>>(new Set());
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false); 
     
     // Config
     const [config, setConfig] = useState<BotConfig>({
@@ -52,7 +53,8 @@ const App = () => {
         aiProfanity: false,
         aiTemperature: 0.3,
         aiMaxTokens: 1000, 
-        bannedWords: '' 
+        bannedWords: '',
+        jokes: ''
     });
     
     // Data States
@@ -126,7 +128,7 @@ const App = () => {
         return () => unsubs.forEach(fn => fn && fn());
     }, []);
 
-    // --- AUTO-SAVE (Front -> Firebase) ---
+    // --- AUTO-SAVE ---
     useEffect(() => { if (canSave('config')) saveData('config', config); }, [config, loadedSections]);
     useEffect(() => { if (canSave('users')) saveData('users', users); }, [users, loadedSections]);
     useEffect(() => { if (canSave('groups')) saveData('groups', groups); }, [groups, loadedSections]);
@@ -137,7 +139,7 @@ const App = () => {
     useEffect(() => { if (canSave('disabledAiTopics')) saveData('disabledAiTopics', disabledAiTopics); }, [disabledAiTopics, loadedSections]);
     useEffect(() => { if (canSave('quickReplies')) saveData('quickReplies', quickReplies); }, [quickReplies, loadedSections]);
     
-    // --- ACTIONS ---
+    // Actions
     const toggleBotStatus = () => {
         const newState = !isBotActive;
         setIsBotActive(newState);
@@ -186,14 +188,11 @@ const App = () => {
 
     const handleLiveChatSend = async (data: { text: string; mediaUrl?: string; mediaFile?: File | null; buttons?: any[]; topicId: string }) => {
         const { text, mediaUrl, mediaFile, buttons, topicId } = data;
-        
         try {
             const markup = buttons && buttons.length > 0 ? JSON.stringify({ 
                 inline_keyboard: buttons.map(b => [{ text: b.text, url: b.url }]) 
             }) : undefined;
-            
             const threadId = topicId !== 'general' ? topicId : undefined;
-
             if (mediaFile) {
                 const fd = new FormData();
                 fd.append('chat_id', config.targetChatId);
@@ -219,36 +218,25 @@ const App = () => {
                     message_thread_id: threadId
                 }, config);
             }
-
-            // Manually update local history for immediate feedback
-            const newMsg = {
-                dir: 'out',
-                text: text,
-                type: 'text',
-                time: new Date().toLocaleTimeString('ru-RU'),
-                timestamp: Date.now(),
-                isIncoming: false,
-                isGroup: true,
-                user: 'Admin'
-            };
-            
+            const newMsg = { dir: 'out', text: text, type: 'text', time: new Date().toLocaleTimeString('ru-RU'), timestamp: Date.now(), isIncoming: false, isGroup: true, user: 'Admin' };
             const updatedTopicHistory = [...(topicHistory[topicId] || []), newMsg];
             setTopicHistory(prev => ({ ...prev, [topicId]: updatedTopicHistory }));
             saveData(`topicHistory/${topicId}`, updatedTopicHistory);
-
         } catch (e) {
             console.error(e);
             alert('Ошибка отправки сообщения');
         }
     };
 
-    // Calculate Uptime (90s threshold)
     const isOnline = (Date.now() - lastHeartbeat) < 90000; 
 
     const TabButton = ({ id, iconKey, label, badge }: any) => {
         const isActive = activeTab === id; const Icon = Icons[iconKey as keyof typeof Icons];
         return ( 
-            <button onClick={() => setActiveTab(id)} className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl transition-all duration-300 group relative overflow-hidden ${isActive ? 'text-white bg-gradient-to-r from-blue-600 to-indigo-600 shadow-lg' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
+            <button 
+                onClick={() => { setActiveTab(id); setIsSidebarOpen(false); }} 
+                className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl transition-all duration-300 group relative overflow-hidden ${isActive ? 'text-white bg-gradient-to-r from-blue-600 to-indigo-600 shadow-lg' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}
+            >
                 <Icon size={20} className={`relative z-10 ${isActive ? 'text-white' : 'text-gray-500 group-hover:text-white'}`} />
                 <span className="font-medium text-sm relative z-10 flex-1 text-left">{label}</span>
                 {badge > 0 && <span className="relative z-10 bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{badge}</span>}
@@ -259,8 +247,13 @@ const App = () => {
 
     return (
         <div className="flex h-screen bg-[#09090b] text-gray-100 font-sans overflow-hidden">
-            <div className="w-72 bg-[#0c0c0e] border-r border-gray-800 flex flex-col shrink-0 relative z-20">
-                <div className="p-8">
+            {/* Sidebar */}
+            <div className={`
+                fixed inset-y-0 left-0 z-50 w-72 bg-[#0c0c0e] border-r border-gray-800 flex flex-col shrink-0 transition-transform duration-300
+                md:relative md:translate-x-0
+                ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+            `}>
+                <div className="p-8 hidden md:block">
                     <div className="flex items-center space-x-3 text-blue-500 mb-2">
                         <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center shadow-lg text-white">
                             <Icons.Zap size={24} />
@@ -270,22 +263,19 @@ const App = () => {
                             <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v2.4</span>
                         </div>
                     </div>
-                    
-                    {/* Status Box */}
-                    <div className="bg-black/40 rounded-lg p-3 border border-gray-800/50 mt-4 space-y-2">
-                        <div className="flex items-center justify-between">
-                             <span className="text-[10px] text-gray-500 uppercase font-bold">Сервер (VPS)</span>
-                             <div className="flex items-center gap-1.5">
-                                 <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`}></div>
-                                 <span className={`text-[10px] font-bold ${isOnline ? 'text-green-400' : 'text-red-400'}`}>{isOnline ? 'ОНЛАЙН' : 'ОФФЛАЙН'}</span>
+                </div>
+
+                {/* VPS Status Indicator (Restored) */}
+                <div className="px-6 mb-4">
+                     <div className={`rounded-lg p-3 border flex items-center justify-between transition-colors ${isOnline ? 'bg-green-500/10 border-green-500/20' : 'bg-red-500/10 border-red-500/20'}`}>
+                         <div className="flex items-center gap-2">
+                             <div className="relative">
+                                 <div className={`w-2.5 h-2.5 rounded-full ${isOnline ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                                 {isOnline && <div className="absolute inset-0 bg-green-500 rounded-full animate-ping opacity-75"></div>}
                              </div>
-                        </div>
-                        <div className="flex items-center justify-between">
-                             <span className="text-[10px] text-gray-500 uppercase font-bold">Режим ответа</span>
-                             <span className={`text-[10px] font-bold px-1.5 rounded ${isBotActive ? 'bg-blue-900/30 text-blue-400' : 'bg-gray-800 text-gray-400'}`}>
-                                {isBotActive ? 'АКТИВЕН' : 'ПАУЗА'}
-                             </span>
-                        </div>
+                             <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">VPS Статус</span>
+                         </div>
+                         <span className={`text-[10px] font-black ${isOnline ? 'text-green-400' : 'text-red-400'}`}>{isOnline ? 'ONLINE' : 'OFFLINE'}</span>
                     </div>
                 </div>
                 
@@ -316,15 +306,12 @@ const App = () => {
                             {isBotActive ? <><Icons.Pause size={14}/> Поставить на Паузу</> : <><Icons.Play size={14}/> Активировать Бота</>}
                         </span>
                     </button>
-                    <div className="text-[9px] text-center text-gray-600 mt-2">
-                        {isBotActive ? 'Бот отвечает пользователям' : 'Бот молчит (только логи)'}
-                    </div>
                 </div>
             </div>
 
-            <div className="flex-1 flex flex-col min-w-0 bg-[#0f0f12] relative overflow-hidden">
-                <div className="flex-1 overflow-auto p-8 scroll-smooth custom-scrollbar">
-                    <div className="max-w-[95%] mx-auto h-full">
+            <div className="flex-1 flex flex-col min-w-0 bg-[#0f0f12] relative overflow-hidden pt-16 md:pt-0">
+                <div className="flex-1 overflow-auto p-4 md:p-8 scroll-smooth custom-scrollbar">
+                    <div className="max-w-[100%] md:max-w-[95%] mx-auto h-full">
                         {activeTab === 'dashboard' && <Dashboard users={users} groups={groups} setGroups={setGroups} aiStats={aiStats} config={config} setConfig={setConfig} isAiThinking={false} setAiStats={setAiStats} addLog={addLog} setActiveTab={setActiveTab} onStopBot={() => setIsBotActive(false)} onClearAiStats={clearAiHistory} viewMode="overview" auditLogs={auditLogs} onDeleteGroup={handleDeleteGroup} />}
                         
                         {activeTab === 'livechat' && <LiveChat 
