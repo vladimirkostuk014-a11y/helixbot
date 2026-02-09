@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Icons } from './Icons';
 import { KnowledgeItem } from '../types';
@@ -57,19 +58,17 @@ const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items, categories, setIte
         setEditCatName(null);
     };
 
-    // Фото загрузка убрана по требованию
-
     return (
-        <div className="flex gap-6 h-full">
-            <div className="w-1/3 bg-gray-800/30 border border-gray-700 rounded-xl overflow-hidden flex flex-col">
-                <div className="p-4 border-b border-gray-700 flex justify-between items-center">
+        <div className="flex flex-col lg:flex-row gap-6 h-full">
+            <div className="w-full lg:w-1/3 bg-gray-800/30 border border-gray-700 rounded-xl overflow-hidden flex flex-col h-[400px] lg:h-full">
+                <div className="p-4 border-b border-gray-700 flex justify-between items-center bg-gray-900/50">
                     <span className="font-medium text-white flex items-center gap-2"><Icons.BookOpen size={18}/> Статьи</span>
                     <div className="flex gap-1">
                         <button onClick={() => { setIsManagingCats(!isManagingCats); setIsEditing(false); }} className={`p-1.5 rounded transition-colors ${isManagingCats ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}><Icons.Folder size={18}/></button>
                         <button onClick={() => { setIsEditing(true); setIsManagingCats(false); setCurrentItem({ id: '', category: '', title: '', response: '', mediaUrl: '', buttons: [] }); }} className="p-1.5 text-gray-400 hover:text-white"><Icons.Plus size={18}/></button>
                     </div>
                 </div>
-                <div className="overflow-y-auto p-2 space-y-4">
+                <div className="overflow-y-auto p-2 space-y-4 custom-scrollbar">
                     {Object.keys(grouped).map(category => (
                         <div key={category} className="mb-4">
                             <div className="flex justify-between items-center px-2 mb-2 group cursor-pointer hover:bg-gray-800/30 rounded py-1" onClick={() => toggleCollapse(category)}>
@@ -97,7 +96,7 @@ const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items, categories, setIte
             </div>
 
             {isManagingCats ? (
-                <div className="w-2/3 bg-gray-800/30 border border-gray-700 rounded-xl p-6 overflow-y-auto">
+                <div className="w-full lg:w-2/3 bg-gray-800/30 border border-gray-700 rounded-xl p-6 overflow-y-auto custom-scrollbar">
                     <h3 className="text-lg font-medium mb-4 text-white flex items-center gap-2"><Icons.Folder size={20} className="text-blue-400"/> Управление разделами</h3>
                     <div className="mb-6 flex gap-2">
                         <input value={newCatName} onChange={(e) => setNewCatName(e.target.value)} className="flex-1 bg-gray-900 border border-gray-600 rounded p-2 text-white" placeholder="Название нового раздела..."/>
@@ -126,10 +125,10 @@ const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items, categories, setIte
                     </div>
                 </div>
             ) : isEditing ? (
-                <div className="w-2/3 bg-gray-800/30 border border-gray-700 rounded-xl p-6 overflow-y-auto">
+                <div className="w-full lg:w-2/3 bg-gray-800/30 border border-gray-700 rounded-xl p-6 overflow-y-auto custom-scrollbar">
                     <h3 className="text-lg font-medium mb-4 text-blue-400">{currentItem.id ? 'Редактировать статью' : 'Новая статья'}</h3>
                     <div className="space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label className="text-xs text-gray-500">Раздел</label>
                                 <select value={currentItem.category} onChange={e => setCurrentItem({...currentItem, category: e.target.value})} className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white outline-none">
@@ -155,7 +154,7 @@ const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items, categories, setIte
                     </div>
                 </div>
             ) : ( 
-                <div className="w-2/3 flex items-center justify-center text-gray-500 border border-dashed border-gray-700 rounded-xl bg-gray-900/10">
+                <div className="hidden lg:flex w-2/3 items-center justify-center text-gray-500 border border-dashed border-gray-700 rounded-xl bg-gray-900/10">
                     <p>Выберите статью или раздел</p>
                 </div> 
             )}

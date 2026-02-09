@@ -32,6 +32,7 @@ const App = () => {
     const [isBotActive, setIsBotActive] = useState(true); 
     const [lastHeartbeat, setLastHeartbeat] = useState(0);
     const [loadedSections, setLoadedSections] = useState<Set<string>>(new Set());
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Mobile sidebar state
     
     // Config
     const [config, setConfig] = useState<BotConfig>({
@@ -248,7 +249,10 @@ const App = () => {
     const TabButton = ({ id, iconKey, label, badge }: any) => {
         const isActive = activeTab === id; const Icon = Icons[iconKey as keyof typeof Icons];
         return ( 
-            <button onClick={() => setActiveTab(id)} className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl transition-all duration-300 group relative overflow-hidden ${isActive ? 'text-white bg-gradient-to-r from-blue-600 to-indigo-600 shadow-lg' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
+            <button 
+                onClick={() => { setActiveTab(id); setIsSidebarOpen(false); }} 
+                className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl transition-all duration-300 group relative overflow-hidden ${isActive ? 'text-white bg-gradient-to-r from-blue-600 to-indigo-600 shadow-lg' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}
+            >
                 <Icon size={20} className={`relative z-10 ${isActive ? 'text-white' : 'text-gray-500 group-hover:text-white'}`} />
                 <span className="font-medium text-sm relative z-10 flex-1 text-left">{label}</span>
                 {badge > 0 && <span className="relative z-10 bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{badge}</span>}
@@ -259,8 +263,31 @@ const App = () => {
 
     return (
         <div className="flex h-screen bg-[#09090b] text-gray-100 font-sans overflow-hidden">
-            <div className="w-72 bg-[#0c0c0e] border-r border-gray-800 flex flex-col shrink-0 relative z-20">
-                <div className="p-8">
+            {/* Mobile Header */}
+            <div className="md:hidden fixed top-0 left-0 right-0 h-16 bg-[#0c0c0e] border-b border-gray-800 flex items-center justify-between px-4 z-40 shadow-lg">
+                <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center text-white">
+                        <Icons.Zap size={18} />
+                    </div>
+                    <span className="font-bold text-white">Helix Bot</span>
+                </div>
+                <button onClick={() => setIsSidebarOpen(true)} className="p-2 text-gray-400 hover:text-white">
+                    <Icons.Settings size={24} />
+                </button>
+            </div>
+
+            {/* Mobile Sidebar Overlay */}
+            {isSidebarOpen && (
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 md:hidden" onClick={() => setIsSidebarOpen(false)} />
+            )}
+
+            {/* Sidebar */}
+            <div className={`
+                fixed inset-y-0 left-0 z-50 w-72 bg-[#0c0c0e] border-r border-gray-800 flex flex-col shrink-0 transition-transform duration-300
+                md:relative md:translate-x-0
+                ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+            `}>
+                <div className="p-8 hidden md:block">
                     <div className="flex items-center space-x-3 text-blue-500 mb-2">
                         <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center shadow-lg text-white">
                             <Icons.Zap size={24} />
@@ -270,21 +297,22 @@ const App = () => {
                             <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v2.4</span>
                         </div>
                     </div>
-                    
-                    {/* Status Box */}
-                    <div className="bg-black/40 rounded-lg p-3 border border-gray-800/50 mt-4 space-y-2">
+                </div>
+
+                <div className="md:hidden p-4 flex items-center justify-between border-b border-gray-800">
+                    <span className="font-bold text-gray-400">Меню</span>
+                    <button onClick={() => setIsSidebarOpen(false)}><Icons.X size={24}/></button>
+                </div>
+                
+                {/* Status Box (Visible in Sidebar) */}
+                <div className="px-6 mb-4">
+                     <div className="bg-black/40 rounded-lg p-3 border border-gray-800/50 space-y-2">
                         <div className="flex items-center justify-between">
-                             <span className="text-[10px] text-gray-500 uppercase font-bold">Сервер (VPS)</span>
+                             <span className="text-[10px] text-gray-500 uppercase font-bold">Сервер</span>
                              <div className="flex items-center gap-1.5">
                                  <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`}></div>
                                  <span className={`text-[10px] font-bold ${isOnline ? 'text-green-400' : 'text-red-400'}`}>{isOnline ? 'ОНЛАЙН' : 'ОФФЛАЙН'}</span>
                              </div>
-                        </div>
-                        <div className="flex items-center justify-between">
-                             <span className="text-[10px] text-gray-500 uppercase font-bold">Режим ответа</span>
-                             <span className={`text-[10px] font-bold px-1.5 rounded ${isBotActive ? 'bg-blue-900/30 text-blue-400' : 'bg-gray-800 text-gray-400'}`}>
-                                {isBotActive ? 'АКТИВЕН' : 'ПАУЗА'}
-                             </span>
                         </div>
                     </div>
                 </div>
@@ -316,15 +344,12 @@ const App = () => {
                             {isBotActive ? <><Icons.Pause size={14}/> Поставить на Паузу</> : <><Icons.Play size={14}/> Активировать Бота</>}
                         </span>
                     </button>
-                    <div className="text-[9px] text-center text-gray-600 mt-2">
-                        {isBotActive ? 'Бот отвечает пользователям' : 'Бот молчит (только логи)'}
-                    </div>
                 </div>
             </div>
 
-            <div className="flex-1 flex flex-col min-w-0 bg-[#0f0f12] relative overflow-hidden">
-                <div className="flex-1 overflow-auto p-8 scroll-smooth custom-scrollbar">
-                    <div className="max-w-[95%] mx-auto h-full">
+            <div className="flex-1 flex flex-col min-w-0 bg-[#0f0f12] relative overflow-hidden pt-16 md:pt-0">
+                <div className="flex-1 overflow-auto p-4 md:p-8 scroll-smooth custom-scrollbar">
+                    <div className="max-w-[100%] md:max-w-[95%] mx-auto h-full">
                         {activeTab === 'dashboard' && <Dashboard users={users} groups={groups} setGroups={setGroups} aiStats={aiStats} config={config} setConfig={setConfig} isAiThinking={false} setAiStats={setAiStats} addLog={addLog} setActiveTab={setActiveTab} onStopBot={() => setIsBotActive(false)} onClearAiStats={clearAiHistory} viewMode="overview" auditLogs={auditLogs} onDeleteGroup={handleDeleteGroup} />}
                         
                         {activeTab === 'livechat' && <LiveChat 
