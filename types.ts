@@ -15,6 +15,7 @@ export interface BotConfig {
     aiPersonality: string; 
     aiBehavior: string;
     aiProfanity: boolean;
+    customProfanity?: string; // New field for custom swear words
     aiTemperature: number;
     aiMaxTokens: number;
     bannedWords: string;

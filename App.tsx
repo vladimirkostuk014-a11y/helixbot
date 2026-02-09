@@ -51,6 +51,7 @@ const App = () => {
         aiPersonality: 'helpful', 
         aiBehavior: 'balanced', 
         aiProfanity: false,
+        customProfanity: '',
         aiTemperature: 0.3,
         aiMaxTokens: 1000, 
         bannedWords: '' 
@@ -157,15 +158,18 @@ const App = () => {
         const emptyStats = { total: 0, history: [] };
         saveData('aiStats', emptyStats); 
         saveData('topicHistory', {});
+        saveData('topicUnreads', {}); // Clear unreads globally
         setAiStats(emptyStats);
         setTopicHistory({});
+        setTopicUnreads({});
+        
         const clearedUsers = { ...users };
         Object.keys(clearedUsers).forEach(key => {
-            clearedUsers[key] = { ...clearedUsers[key], history: [], msgCount: 0, dailyMsgCount: 0 };
+            clearedUsers[key] = { ...clearedUsers[key], history: [], msgCount: 0, dailyMsgCount: 0, unreadCount: 0 };
         });
         setUsers(clearedUsers);
         saveData('users', clearedUsers);
-        addLog('Система', 'История очищена через панель', 'warning');
+        addLog('Система', 'История и счетчики очищены через панель', 'warning');
     };
 
     const handleCalendarUpdate = (action: React.SetStateAction<CalendarEvent[]>) => {
@@ -360,7 +364,14 @@ const App = () => {
                             disabledAiTopics={disabledAiTopics} 
                             unreadCounts={topicUnreads}
                             onToggleAi={(tid) => { const list = disabledAiTopics.includes(tid) ? disabledAiTopics.filter(t => t !== tid) : [...disabledAiTopics, tid]; setDisabledAiTopics(list); saveData('disabledAiTopics', list); }} 
-                            onClearTopic={(tid) => { const h = {...topicHistory, [tid]: []}; setTopicHistory(h); saveData('topicHistory', h); }} 
+                            onClearTopic={(tid) => { 
+                                const h = {...topicHistory, [tid]: []}; 
+                                setTopicHistory(h); 
+                                saveData('topicHistory', h);
+                                // FORCE CLEAR UNREADS
+                                setTopicUnreads(prev => ({...prev, [tid]: 0}));
+                                saveData(`topicUnreads/${tid}`, 0);
+                            }} 
                             onRenameTopic={(id, name) => { const n = {...topicNames, [id]: name}; setTopicNames(n); saveData('topicNames', n); }} 
                             quickReplies={quickReplies} 
                             setQuickReplies={(qr) => { setQuickReplies(qr); saveData('quickReplies', qr); }} 

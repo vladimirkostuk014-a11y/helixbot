@@ -77,7 +77,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         const report = `📊 <b>ТОП-10 Вопросов Хеликсу:</b>\n\n` + 
                        top.map((t, i) => `${i+1}. ${t.query} (${t.count})`).join('\n');
                        
-        const admins = Object.values(users).filter(u => u.role === 'admin');
+        const admins = (Object.values(users) as User[]).filter(u => u.role === 'admin');
         let sentCount = 0;
         
         for (const admin of admins) {
@@ -170,7 +170,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                         </h2>
                     </div>
                     
-                    <div className="space-y-4 relative z-10 flex-1">
+                    <div className="space-y-4 relative z-10 flex-1 overflow-y-auto custom-scrollbar pr-2">
                         
                         {/* New Model Selector */}
                         <div>
@@ -185,11 +185,11 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                         <div>
                             <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Личность (Характер)</label>
                             <select value={config.aiPersonality || 'helpful'} onChange={e => setConfig({...config, aiPersonality: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
-                                <option value="helpful">😄 Хеликс (Обычный)</option>
-                                <option value="kind">💖 Добряк (Поддержка)</option>
+                                <option value="helpful">😄 Хеликс (Обычный, Полезный)</option>
+                                <option value="kind">💖 Добряк (Поддержка, Милый)</option>
                                 <option value="official">🧐 Официальный (Бюрократ)</option>
-                                <option value="joker">🤡 Шутник (Сарказм)</option>
-                                <option value="angry">😡 Злой (Агрессивный)</option>
+                                <option value="joker">🤡 Шутник (Сарказм, Тролль)</option>
+                                <option value="angry">😡 Злой (Агрессивный, Токсик)</option>
                                 <option value="philosopher">🤔 Философ (Загадки)</option>
                                 <option value="cyberpunk">🤖 Киберпанк (Нетраннер)</option>
                                 <option value="gopnik">🍺 Гопник (Мат, Сленг)</option>
@@ -199,9 +199,9 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                         <div>
                             <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Стиль ответа (Длина)</label>
                             <select value={config.aiBehavior || 'balanced'} onChange={e => setConfig({...config, aiBehavior: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
-                                <option value="balanced">⚖️ Сбалансированный</option>
+                                <option value="balanced">⚖️ Сбалансированный (2-3 предл.)</option>
                                 <option value="concise">⚡ Коротко и ясно (1 предл.)</option>
-                                <option value="detailed">📜 Подробно и детально (Лонгрид)</option>
+                                <option value="detailed">📜 Подробно (Абзацы)</option>
                                 <option value="bullet">📝 Списком (Факты)</option>
                             </select>
                         </div>
@@ -220,6 +220,20 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                 </label>
                             </div>
                         </div>
+
+                        {/* Custom Profanity Field */}
+                         {config.aiProfanity && (
+                            <div className="animate-slideIn">
+                                <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Свои словечки (через запятую)</label>
+                                <textarea 
+                                    value={config.customProfanity || ''} 
+                                    onChange={e => setConfig({...config, customProfanity: e.target.value})}
+                                    placeholder="Например: блин, капец, ё-моё (или жестче)"
+                                    className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-red-500 outline-none transition-colors h-20 resize-none"
+                                />
+                                <p className="text-[10px] text-gray-500 mt-1">Хеликс будет иногда использовать эти слова в диалогах.</p>
+                            </div>
+                        )}
 
                          <div className="flex gap-2 mt-auto pt-6">
                             <button onClick={() => setShowPlayground(true)} className="flex-1 bg-gradient-to-r from-gray-900 to-gray-800 hover:from-gray-800 hover:to-gray-700 text-purple-300 border border-purple-900/30 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg flex items-center justify-center gap-2 group">
@@ -244,7 +258,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                             <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar bg-black/20">
                                 {playgroundHistory.map((msg, i) => (
                                     <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                                        <div className={`max-w-[80%] px-4 py-2 rounded-2xl text-sm leading-relaxed ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-gray-800 text-gray-200 rounded-bl-none border border-gray-700'}`}>
+                                        <div className={`max-w-[80%] px-4 py-2 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-gray-800 text-gray-200 rounded-bl-none border border-gray-700'}`}>
                                             <div className="font-bold text-[10px] opacity-50 mb-1">{msg.role === 'user' ? 'Вы' : config.botName}</div>
                                             {msg.text}
                                         </div>
@@ -297,7 +311,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                             <button onClick={() => setShowGroupModal(false)}><Icons.X size={20} className="text-gray-500 hover:text-white"/></button>
                         </div>
                         <div className="max-h-[500px] overflow-y-auto custom-scrollbar space-y-3">
-                            {Object.values(groups).map((g) => (
+                            {(Object.values(groups) as Group[]).map((g) => (
                                 <div key={g.id} className="flex items-center justify-between p-4 bg-gray-900 rounded-lg border border-gray-800">
                                     <div className="text-white font-bold">{g.title}</div>
                                     <div className="flex gap-2">
@@ -336,7 +350,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                     <div key={i} className="bg-gray-900 p-4 rounded-lg border border-gray-800">
                                         <div className="flex justify-between text-xs text-gray-500 mb-2"><span>#{i+1}</span><span>{new Date(h.time).toLocaleString('ru-RU')}</span></div>
                                         <div className="text-white text-sm font-bold mb-1">Q: {h.query}</div>
-                                        <div className="text-gray-400 text-sm pl-2 border-l-2 border-purple-900">A: {h.response}</div>
+                                        <div className="text-gray-400 text-sm pl-2 border-l-2 border-purple-900 whitespace-pre-wrap">A: {h.response}</div>
                                     </div>
                                 ))}
                             </div>
@@ -441,7 +455,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                     <div className={`mt-1 w-1.5 h-1.5 rounded-full shrink-0 ${log.type === 'danger' ? 'bg-red-500' : log.type === 'warning' ? 'bg-yellow-500' : 'bg-blue-500'}`}></div>
                                     <div className="min-w-0">
                                         <div className="text-xs text-gray-300 font-medium truncate">{log.action}</div>
-                                        <div className="text-[10px] text-gray-500 truncate">{new Date(log.timestamp).toLocaleTimeString()}</div>
+                                        <div className="text--[10px] text-gray-500 truncate">{new Date(log.timestamp).toLocaleTimeString()}</div>
                                     </div>
                                 </div>
                             ))}

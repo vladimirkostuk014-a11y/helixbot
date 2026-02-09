@@ -57,7 +57,7 @@ const LiveChat: React.FC<LiveChatProps> = ({
     // Audio Notification
     const prevUnreadCountRef = useRef(0);
     useEffect(() => {
-        const totalUnread = Object.values(unreadCounts).reduce((a, b) => a + b, 0);
+        const totalUnread = Object.values(unreadCounts).reduce((a: number, b: number) => a + b, 0);
         if (totalUnread > prevUnreadCountRef.current) {
             // Play Sound
             const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'); // Simple Ding

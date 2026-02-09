@@ -36,7 +36,7 @@ let lastUpdateId = 0;
 const processedUpdates = new Set();
 const sentCalendarNotifications = new Set();
 
-console.log("🔥 [SERVER] Запуск сервера Helix (v7.1 Fixes)...");
+console.log("🔥 [SERVER] Запуск сервера Helix (v8.0 Anti-Hallucination)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -108,13 +108,24 @@ const restrictUser = async (chatId, userId, permissions, untilDate = 0) => {
 };
 
 // ==========================================
-// 4. CRON ЗАДАЧИ
+// 4. CRON ЗАДАЧИ (MOSCOW TIME)
 // ==========================================
 const runCronJobs = async () => {
-    const now = new Date();
-    const timeString = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-    const dateString = now.toLocaleDateString('ru-RU').split('.').reverse().join('-'); 
+    // Force Moscow Time
+    const moscowNow = new Date().toLocaleString("en-US", {timeZone: "Europe/Moscow"});
+    const now = new Date(moscowNow);
     
+    // Format: HH:mm (24h) and YYYY-MM-DD
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const timeString = `${hours}:${minutes}`;
+    
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const dateString = `${year}-${month}-${day}`;
+    
+    // Daily Cleanup at Midnight Moscow Time
     if (timeString === '00:00') {
         try {
             await set(ref(db, 'topicHistory'), {});
@@ -217,43 +228,46 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
 // 6. AI (STRICT MODE + ERROR HANDLING)
 // ==========================================
 const getAIResponse = async (question, userName) => {
-    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiBehavior, aiTemperature } = state.config;
+    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiBehavior, aiTemperature, customProfanity } = state.config;
     if (!openaiApiKey) return "⚠️ Ключ AI не настроен.";
 
     const context = state.knowledgeBase.map(k => `[DATA] Q: ${k.title} -> A: ${k.response}`).join('\n');
-    let tone = "Ты полезный помощник.";
-    let style = "Отвечай кратко.";
-    let profanityInstr = "";
-
-    if (aiProfanity) {
-        tone = "Ты дерзкий, используешь русский мат и сленг.";
-        profanityInstr = "ОБЯЗАТЕЛЬНО используй мат. Будь грубым.";
-    } else {
-        switch (aiPersonality) {
-            case 'angry': tone = "Ты злой, агрессивный."; break;
-            case 'joker': tone = "Ты клоун. Постоянно шутишь."; break;
-            case 'gopnik': tone = "Ты гопник."; break;
-            case 'kind': tone = "Ты очень добрый."; break;
-            case 'philosopher': tone = "Ты философ."; break;
-            case 'cyberpunk': tone = "Ты кибер-имплант."; break;
-            case 'official': tone = "Ты сухой бюрократ."; break;
-        }
+    
+    // Identity Construction
+    let identity = "Ты полезный помощник Хеликс.";
+    switch (aiPersonality) {
+        case 'angry': identity = "Ты злой, токсичный бот. Грубишь всем."; break;
+        case 'joker': identity = "Ты стендап-комик и тролль. Сарказм - твое второе имя."; break;
+        case 'gopnik': identity = "Ты реальный пацанчик. Используй сленг 'слышь', 'братишка'."; break;
+        case 'kind': identity = "Ты милый, заботливый, используешь сердечки."; break;
+        case 'philosopher': identity = "Ты философ. Говоришь загадками о вечном."; break;
+        case 'cyberpunk': identity = "Ты кибер-имплант из 2077. Сленг: 'хром', 'дека'."; break;
+        case 'official': identity = "Ты сухой бюрократ. Формальный стиль."; break;
     }
 
-    if (aiBehavior === 'detailed') style = "Отвечай ОЧЕНЬ ПОДРОБНО.";
-    if (aiBehavior === 'concise') style = "Отвечай одним предложением.";
-    if (aiBehavior === 'bullet') style = "Отвечай списком.";
+    let profanityInstr = aiProfanity 
+        ? `ОБЯЗАТЕЛЬНО используй мат в стиле своей личности.${customProfanity ? ' Используй также: ' + customProfanity : ''}` 
+        : "Мат запрещен.";
+
+    let style = "Отвечай 2-3 предложениями.";
+    if (aiBehavior === 'concise') style = "Отвечай 1 предложением.";
+    if (aiBehavior === 'detailed') style = "Отвечай подробно, абзацами.";
+    if (aiBehavior === 'bullet') style = "Используй списки.";
 
     const systemPrompt = `
-    IDENTITY: Ты бот Хеликс. Твой характер: ${tone} ${profanityInstr}
-    KNOWLEDGE BASE: ${context}
+    IDENTITY: ${identity}
+    ${profanityInstr}
+    STYLE: ${style} Use Russian language. Format nicely with paragraphs.
+    
+    KNOWLEDGE BASE:
+    ${context}
+
     PROTOCOL:
-    1. Type A (Small Talk): Chat using Personality.
-    2. Type B (Data Query): STRICT KNOWLEDGE BASE LOOKUP.
-       - IF FOUND: Answer using data.
-       - IF NOT FOUND: Say "I don't know" or "Not in database".
-       - CRITICAL: DO NOT INVENT DATA.
-    FORMAT: ${style} Language: Russian.
+    1. CLASSIFY: Is it Small Talk ("Hi", "How are you") or Data Query?
+    2. IF SMALL TALK: Chat freely using personality.
+    3. IF DATA QUERY: CHECK KNOWLEDGE BASE STRICTLY.
+       - FOUND? Answer with data.
+       - NOT FOUND? Say "I don't know" (in character). DO NOT INVENT FACTS.
     `;
 
     try {
@@ -268,10 +282,15 @@ const getAIResponse = async (question, userName) => {
             })
         });
         
+        if (response.status === 429) {
+             if (aiPersonality === 'gopnik') return "Тормози, братишка! Я перегрелся. Жди.";
+             if (aiPersonality === 'official') return "Лимит запросов исчерпан. Ожидайте.";
+             return "Слишком много запросов. Дайте мне минуту.";
+        }
+
         if (!response.ok) {
-            const errText = await response.text();
-            console.error("AI API Error:", errText);
-            return `Ошибка AI (${response.status}): Проверьте ключ или лимиты.`;
+            console.error("AI API Error:", response.status);
+            return "Ошибка AI (сбой сети).";
         }
         
         const data = await response.json();
@@ -299,7 +318,6 @@ const handleSystemCommand = async (command, msg, targetThread) => {
             const userData = userSnap.val() || {};
             const newWarns = (userData.warnings || 0) + 1;
             
-            // FIX: Добавлена защита от undefined username
             await firebaseUpdate(ref(db, userPath), { 
                 warnings: newWarns, 
                 name: targetUser.first_name, 
@@ -329,7 +347,6 @@ const processUpdate = async (tgUpdate) => {
     const targetChatId = String(state.config.targetChatId);
     const isPrivate = msg.chat.type === 'private';
 
-    // Если это не ЛС и не Целевой чат — бот полностью игнорирует сообщение
     if (!isPrivate && chatId !== targetChatId) {
         return; 
     }
@@ -390,8 +407,7 @@ const processUpdate = async (tgUpdate) => {
                     message_thread_id: threadId !== 'general' ? threadId : undefined
                 });
                 
-                // --- 2. FIX AI STATS CRASH ---
-                // Используем безопасное получение массива истории
+                // AI Stats & History
                 const curHistRaw = state.aiStats?.history;
                 const curHist = Array.isArray(curHistRaw) ? curHistRaw : [];
                 const newStat = { query: question || "Привет", response: answer, time: Date.now() };
