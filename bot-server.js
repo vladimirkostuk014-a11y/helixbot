@@ -36,7 +36,7 @@ let lastUpdateId = 0;
 const processedUpdates = new Set();
 const sentCalendarNotifications = new Set();
 
-console.log("🔥 [SERVER] Запуск сервера Helix (MSK Fix + Strict AI)...");
+console.log("🔥 [SERVER] Helix Node Started (Strict MSK + Hard AI)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -66,7 +66,7 @@ onValue(ref(db, 'status/active'), (snap) => {
     state.isBotActive = snap.val() !== false; 
 });
 
-// HEARTBEAT
+// HEARTBEAT (VPS CONNECTION STATUS)
 setInterval(() => {
     set(ref(db, 'status/heartbeat'), Date.now()).catch(() => {});
 }, 30000);
@@ -84,7 +84,6 @@ const apiCall = async (method, body) => {
         });
         return await response.json();
     } catch (e) {
-        console.error(`[NETWORK] ${method}:`, e.message);
         return { ok: false };
     }
 };
@@ -108,17 +107,21 @@ const restrictUser = async (chatId, userId, permissions, untilDate = 0) => {
 };
 
 // ==========================================
-// 4. CRON ЗАДАЧИ (С ПОДДЕРЖКОЙ МСК)
+// 4. CRON ЗАДАЧИ (STRICT MSK TIME)
 // ==========================================
 const runCronJobs = async () => {
-    // Получаем текущее время в МСК
-    const mskNow = new Date(new Date().toLocaleString("en-US", {timeZone: "Europe/Moscow"}));
+    // Получаем текущее время СТРОГО в MSK
+    const mskDateString = new Date().toLocaleString("en-US", {timeZone: "Europe/Moscow"});
+    const mskNow = new Date(mskDateString);
+    
+    // Форматируем для сравнения с базой (HH:mm и YYYY-MM-DD)
     const timeString = mskNow.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
     const dateString = mskNow.toLocaleDateString('ru-RU').split('.').reverse().join('-'); 
     
-    // Сброс статистики в полночь по МСК
+    // Очистка в 00:00 по МСК
     if (timeString === '00:00') {
         try {
+            await set(ref(db, 'topicHistory'), {});
             await set(ref(db, 'topicUnreads'), {});
             const usersRef = ref(db, 'users');
             const snapshot = await get(usersRef);
@@ -129,16 +132,18 @@ const runCronJobs = async () => {
                 await firebaseUpdate(usersRef, updates);
             }
         } catch (e) { console.error("Cleanup error:", e); }
-        await new Promise(r => setTimeout(r, 65000));
+        await new Promise(r => setTimeout(r, 60000));
     }
 
+    // Календарь
     if (state.calendarEvents && state.config.targetChatId && state.config.enableCalendarAlerts) {
         for (const event of state.calendarEvents) {
-            // Сравнение по строкам даты и времени (уже в МСК)
+            // Сравниваем строки даты и времени
             if (event.notifyDate === dateString && event.notifyTime === timeString) {
                 const uniqueKey = `${event.id}_${dateString}_${timeString}`;
                 if (!sentCalendarNotifications.has(uniqueKey)) {
                     sentCalendarNotifications.add(uniqueKey);
+                    
                     const msg = `⚡️ <b>${event.title}</b>\n\n📅 <b>Даты:</b> ${event.startDate} — ${event.endDate}\n📂 <i>Категория: ${event.category}</i>\n\n${event.description || ''}`;
                     const inlineKeyboard = event.buttons && event.buttons.length > 0 ? { inline_keyboard: event.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
                     const threadId = event.topicId !== 'general' ? event.topicId : undefined;
@@ -152,7 +157,8 @@ const runCronJobs = async () => {
             }
         }
     }
-    if (timeString === '00:01') sentCalendarNotifications.clear();
+    // Очистка кеша уведомлений каждую минуту, чтобы не спамить
+    if (timeString.endsWith('01')) sentCalendarNotifications.clear();
 };
 setInterval(runCronJobs, 30000);
 
@@ -216,52 +222,44 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
 };
 
 // ==========================================
-// 6. AI (STRICT SYSTEM PROMPT)
+// 6. AI (FIXED LOGIC)
 // ==========================================
-const getAIResponse = async (question, userName) => {
-    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiBehavior, aiTemperature } = state.config;
+const getAIResponse = async (question) => {
+    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiBehavior, aiTemperature, jokes } = state.config;
     if (!openaiApiKey) return "⚠️ Ключ AI не настроен.";
 
     const context = state.knowledgeBase.map(k => `[DATA] Q: ${k.title} -> A: ${k.response}`).join('\n');
     let tone = "Ты Хеликс, помощник.";
-    let style = "Пиши грамотно, используй абзацы.";
-    let profanityInstr = "";
+    let profanity = "";
 
     if (aiProfanity) {
-        tone = "Ты дерзкий персонаж из криминального мира. Ты ОБЯЗАН использовать жесткий русский мат.";
-        profanityInstr = "ПРАВИЛО: Будь грубым. Каждое сообщение — с матом. Используй фразы: 'за базар ответишь', 'слышь, фраер'. Если спрашивают про игру — отвечай матом, но по делу.";
+        tone = "Ты дерзкий пацан. Твоя речь на 50% состоит из жесткого русского мата (бля, ебать, нахуй). Стиль: агрессивный.";
+        profanity = "ОБЯЗАТЕЛЬНО: Используй мат в каждом предложении. Никакой цензуры. Будь грубым.";
     } else {
         switch (aiPersonality) {
-            case 'angry': tone = "Ты злой и агрессивный."; break;
-            case 'joker': tone = "Ты шутник и тролль."; break;
-            case 'gopnik': tone = "Ты гопник."; break;
-            case 'kind': tone = "Ты очень добрый."; break;
-            case 'philosopher': tone = "Ты философ."; break;
-            case 'cyberpunk': tone = "Ты нетраннер из будущего."; break;
-            case 'official': tone = "Ты сухой бюрократ."; break;
+            case 'angry': tone = "Ты злой и ворчливый."; break;
+            case 'joker': tone = "Ты остряк и тролль."; break;
+            case 'kind': tone = "Ты добряк."; break;
         }
     }
 
-    if (aiBehavior === 'detailed') style = "Давай ОЧЕНЬ ПОДРОБНЫЕ ответы, разделяя их на 3-4 абзаца.";
-    if (aiBehavior === 'concise') style = "Отвечай ровно одним коротким предложением.";
-    if (aiBehavior === 'bullet') style = "Отвечай только списком по пунктам.";
-
     const systemPrompt = `
-    IDENTITY: Ты бот Хеликс. Характер: ${tone} ${profanityInstr}
-    Всегда пиши на чистом русском (кроме мата) и используй абзацы.
+    IDENTITY: Ты Хеликс. Твой характер: ${tone}
+    ${profanity}
 
-    KNOWLEDGE BASE (STRICT):
+    JOKE BANK (Твои фразы):
+    ${jokes || 'Нет шуток.'}
+
+    KNOWLEDGE BASE (GAME DATA ONLY):
     ${context}
 
     PROTOCOL:
-    1. SMALL TALK (Приветики, как дела, расскажи о себе):
-       - Общайся свободно в рамках своей ЛИЧНОСТИ.
-    2. GAME DATA (Вопросы про руны, героев, шмот, ивенты):
-       - СТРОГО ИЩИ В [KNOWLEDGE BASE].
-       - ЕСЛИ НЕТ В БАЗЕ: Скажи "Я не знаю" (в своем стиле). 
-       - НЕ ПРИДУМЫВАЙ ЦИФРЫ И СТАТЫ. Галлюцинации ЗАПРЕЩЕНЫ.
+    1. Если вопрос "Привет", "Как дела" (Small Talk) -> Отвечай свободно по Характеру (используй шутки). Игнорируй базу.
+    2. Если вопрос про ИГРУ (Руны, Статы) -> СТРОГО ищи в KNOWLEDGE BASE. 
+       - Если нет в базе -> Скажи "Не знаю" (в своем стиле).
+       - ЗАПРЕЩЕНО ВЫДУМЫВАТЬ ЦИФРЫ.
 
-    FORMAT: ${style}
+    Язык: Русский. Используй абзацы.
     `;
 
     try {
@@ -271,11 +269,12 @@ const getAIResponse = async (question, userName) => {
             body: JSON.stringify({
                 model: aiModel || "llama-3.3-70b-versatile",
                 messages: [{ role: "system", content: systemPrompt }, { role: "user", content: question }],
-                temperature: aiTemperature || 0.4, 
-                max_tokens: aiBehavior === 'detailed' ? 1500 : 800
+                temperature: aiTemperature || 0.5,
+                max_tokens: 800
             })
         });
         
+        if (response.status === 429) return "Братишка, я устал (лимиты), приду в себя через пару минут.";
         const data = await response.json();
         return data.choices?.[0]?.message?.content || "Ошибка AI.";
     } catch (e) { return "Ошибка сети AI."; }
@@ -298,7 +297,11 @@ const handleSystemCommand = async (command, msg, targetThread) => {
             const userData = userSnap.val() || {};
             const newWarns = (userData.warnings || 0) + 1;
             
-            await firebaseUpdate(ref(db, userPath), { warnings: newWarns, name: targetUser.first_name, username: targetUser.username || '' });
+            await firebaseUpdate(ref(db, userPath), { 
+                warnings: newWarns, 
+                name: targetUser.first_name, 
+                username: targetUser.username || '' 
+            });
             
             if (newWarns >= 3) {
                 await restrictUser(chatId, targetUser.id, { can_send_messages: false }, Math.floor(Date.now()/1000) + 172800);
@@ -312,17 +315,18 @@ const handleSystemCommand = async (command, msg, targetThread) => {
 };
 
 // ==========================================
-// 8. PROCESS UPDATE
+// 8. ОБРАБОТКА
 // ==========================================
 const processUpdate = async (tgUpdate) => {
     const msg = tgUpdate.message;
     if (!msg) return; 
 
+    // FILTER CHATS
     const chatId = String(msg.chat.id);
     const targetChatId = String(state.config.targetChatId);
     const isPrivate = msg.chat.type === 'private';
 
-    if (!isPrivate && chatId !== targetChatId) return; 
+    if (!isPrivate && chatId !== targetChatId) return;
 
     const threadId = msg.message_thread_id ? String(msg.message_thread_id) : 'general';
     const text = (msg.text || msg.caption || '').trim();
@@ -331,7 +335,7 @@ const processUpdate = async (tgUpdate) => {
     const logMsg = {
         dir: 'in', text: text || `[Media]`, type: msg.photo ? 'photo' : 'text',
         time: new Date().toLocaleTimeString('ru-RU'),
-        isGroup: !isPrivate, user: user.first_name, userId: user.id, timestamp: Date.now()
+        isGroup: !isPrivate, user: user.first_name, userId: user.id
     };
 
     await updateUserHistory(user, logMsg);
@@ -343,15 +347,14 @@ const processUpdate = async (tgUpdate) => {
     if (text) {
         const lowerText = text.toLowerCase();
         
-        // /slap command
         if (lowerText.startsWith('/лещ') || lowerText.startsWith('/slap')) {
             const target = msg.reply_to_message ? msg.reply_to_message.from.first_name : (text.split(' ').slice(1).join(' ') || 'воздух');
-            await sendMessage(chatId, `👋 <b>${user.first_name}</b> дал смачного леща <b>${target}</b>!`, { message_thread_id: threadId !== 'general' ? threadId : undefined });
+            const replyText = `👋 <b>${user.first_name}</b> дал смачного леща <b>${target}</b>!`;
+            await sendMessage(chatId, replyText, { message_thread_id: threadId !== 'general' ? threadId : undefined });
             return;
         }
 
-        // Admin system commands
-        if (['/warn', '/mute', '/ban', '/unmute'].some(c => lowerText.startsWith(c))) {
+        if (['/warn', '/mute'].some(c => lowerText.startsWith(c))) {
             const cmd = lowerText.split(' ')[0];
             if (state.config.adminIds && state.config.adminIds.includes(String(user.id))) {
                 await handleSystemCommand(cmd, msg, threadId !== 'general' ? threadId : undefined);
@@ -359,14 +362,6 @@ const processUpdate = async (tgUpdate) => {
             }
         }
         
-        // Custom triggers
-        for (const cmd of state.commands) {
-            if (cmd.matchType === 'exact' && lowerText === cmd.trigger.toLowerCase()) {
-                await sendMessage(chatId, cmd.response, { message_thread_id: threadId !== 'general' ? threadId : undefined });
-                return;
-            }
-        }
-
         // AI Logic
         if (state.config.enableAI) {
             const isMention = lowerText.includes('хеликс') || lowerText.includes('helix') || (isPrivate && state.config.enablePM);
@@ -374,14 +369,15 @@ const processUpdate = async (tgUpdate) => {
 
             if (isMention && !isDisabled) {
                 const question = text.replace(/хеликс|helix/gi, '').trim();
-                const answer = await getAIResponse(question || "Привет", user.first_name);
+                const answer = await getAIResponse(question || "Привет");
                 
                 await sendMessage(chatId, answer, { 
                     reply_to_message_id: msg.message_id,
                     message_thread_id: threadId !== 'general' ? threadId : undefined
                 });
                 
-                const curHist = Array.isArray(state.aiStats?.history) ? state.aiStats.history : [];
+                const curHistRaw = state.aiStats?.history;
+                const curHist = Array.isArray(curHistRaw) ? curHistRaw : [];
                 const newStat = { query: question || "Привет", response: answer, time: Date.now() };
 
                 await set(ref(db, 'aiStats'), { 
@@ -389,7 +385,7 @@ const processUpdate = async (tgUpdate) => {
                     history: [newStat, ...curHist].slice(0, 100) 
                 });
                 
-                if (!isPrivate) await updateTopicHistory(threadId, { user: 'Bot', text: answer, isIncoming: false, time: new Date().toLocaleTimeString('ru-RU'), type: 'text', timestamp: Date.now() }, null);
+                if (!isPrivate) await updateTopicHistory(threadId, { user: 'Bot', text: answer, isIncoming: false, time: new Date().toLocaleTimeString('ru-RU'), type: 'text' }, null);
             }
         }
     }
@@ -410,10 +406,7 @@ const startLoop = async () => {
                     }
                     if (processedUpdates.size > 5000) processedUpdates.clear();
                 }
-            } catch (e) { 
-                console.error("Polling Error:", e.message);
-                await new Promise(r => setTimeout(r, 5000)); 
-            }
+            } catch (e) { await new Promise(r => setTimeout(r, 5000)); }
         } else { await new Promise(r => setTimeout(r, 2000)); }
     }
 };

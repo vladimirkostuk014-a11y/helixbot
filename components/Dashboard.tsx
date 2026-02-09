@@ -73,19 +73,13 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     const handleSendTopToAdmins = async () => {
         const top = getTopQuestions().slice(0, 10);
         if (top.length === 0) return alert("Нет данных для отчета");
-        
-        const report = `📊 <b>ТОП-10 Вопросов Хеликсу:</b>\n\n` + 
-                       top.map((t, i) => `${i+1}. ${t.query} (${t.count})`).join('\n');
-                       
-        // Use typed userArray to avoid 'unknown' type error
-        const admins = userArray.filter(u => u.role === 'admin');
+        const report = `📊 <b>ТОП-10 Вопросов Хеликсу:</b>\n\n` + top.map((t, i) => `${i+1}. ${t.query} (${t.count})`).join('\n');
+        const admins = (Object.values(users) as User[]).filter(u => u.role === 'admin');
         let sentCount = 0;
-        
         for (const admin of admins) {
             await apiCall('sendMessage', { chat_id: admin.id, text: report, parse_mode: 'HTML' }, config);
             sentCount++;
         }
-        
         alert(`Отчет отправлен ${sentCount} админам.`);
         if (addLog) addLog('AI Отчет', `Топ вопросов отправлен ${sentCount} админам`, 'success');
     };
@@ -163,7 +157,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     if (viewMode === 'settings') {
         return (
              <div className="space-y-6">
-                 {/* AI Settings Block */}
                  <div className="bg-[#121214] p-6 rounded-2xl border border-gray-800 shadow-xl relative overflow-hidden flex flex-col h-full">
                     <div className="flex justify-between items-center mb-6 border-b border-gray-800 pb-4">
                         <h2 className="text-xl font-bold text-white flex items-center gap-2">
@@ -172,15 +165,12 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                     
                     <div className="space-y-4 relative z-10 flex-1">
-                        
-                        {/* New Model Selector */}
                         <div>
                             <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Модель AI (Ядро)</label>
                             <select value={config.aiModel || 'llama-3.3-70b-versatile'} onChange={e => setConfig({...config, aiModel: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
                                 <option value="llama-3.3-70b-versatile">🧠 Llama 3.3 70B (Основная)</option>
                                 <option value="llama-3.1-8b-instant">⚡ Llama 3.1 8B (Быстрая)</option>
                             </select>
-                            <p className="text-[10px] text-gray-500 mt-1">70B умнее и лучше держит контекст. 8B работает быстрее.</p>
                         </div>
 
                         <div>
@@ -222,7 +212,21 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                             </div>
                         </div>
 
-                         <div className="flex gap-2 mt-auto pt-6">
+                        {/* Jokes Bank */}
+                        <div className="pt-2">
+                             <label className="text-xs text-gray-400 font-bold uppercase mb-2 block flex items-center gap-2">
+                                <Icons.MessageCircle size={14}/> Банк шуток и фраз
+                             </label>
+                             <textarea 
+                                value={config.jokes || ''} 
+                                onChange={e => setConfig({...config, jokes: e.target.value})} 
+                                className="w-full bg-black border border-gray-700 rounded-xl p-4 text-white text-sm min-h-[120px] outline-none focus:border-purple-500 font-mono" 
+                                placeholder="Впиши сюда коронные фразы бота (по одной на строку)..."
+                             />
+                             <p className="text-[10px] text-gray-500 mt-1">Бот будет иногда использовать эти фразы в диалоге.</p>
+                        </div>
+
+                         <div className="flex gap-2 mt-auto pt-4">
                             <button onClick={() => setShowPlayground(true)} className="flex-1 bg-gradient-to-r from-gray-900 to-gray-800 hover:from-gray-800 hover:to-gray-700 text-purple-300 border border-purple-900/30 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg flex items-center justify-center gap-2 group">
                                 <Icons.Terminal size={18} className="text-purple-500 group-hover:scale-110 transition-transform"/>
                                 <span>Тест Личности</span>
@@ -233,9 +237,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                         </div>
                     </div>
                  </div>
-
-                {/* Playground Modal */}
-                {showPlayground && (
+                 {showPlayground && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowPlayground(false)}>
                         <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl animate-slideIn flex flex-col h-[600px]" onClick={e => e.stopPropagation()}>
                             <div className="flex justify-between items-center p-4 border-b border-gray-800">
@@ -261,13 +263,12 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                         </div>
                     </div>
                 )}
-            </div>
+             </div>
         );
     }
 
     return (
         <div className="space-y-8 relative">
-            {/* ... (Active Users Modal & Groups Modal) ... */}
             {showActiveModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowActiveModal(false)}>
                     <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl p-6 animate-slideIn" onClick={e => e.stopPropagation()}>
@@ -296,7 +297,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                             <button onClick={() => setShowGroupModal(false)}><Icons.X size={20} className="text-gray-500 hover:text-white"/></button>
                         </div>
                         <div className="max-h-[500px] overflow-y-auto custom-scrollbar space-y-3">
-                            {/* Explicitly cast to Group[] to avoid 'unknown' type error */}
                             {(Object.values(groups) as Group[]).map((g) => (
                                 <div key={g.id} className="flex items-center justify-between p-4 bg-gray-900 rounded-lg border border-gray-800">
                                     <div className="text-white font-bold">{g.title}</div>
@@ -311,7 +311,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                 </div>
             )}
 
-            {/* AI Modal (Updated with Send Report Button) */}
             {showAiModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowAiModal(false)}>
                     <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-4xl shadow-2xl animate-slideIn p-6" onClick={e => e.stopPropagation()}>
@@ -356,46 +355,19 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                 </div>
             )}
             
-            {/* KPI Cards and Charts */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                <KpiCard 
-                    icon={Icons.Users} title="Всего пользователей" 
-                    value={Object.keys(users).length} 
-                    color="bg-blue-500" gradient="from-gray-900 to-gray-800 hover:to-gray-700"
-                    onClick={() => setActiveTab && setActiveTab('users')} 
-                />
-                <KpiCard 
-                    icon={Icons.Activity} title="Активные сегодня" 
-                    value={activeUsers.length} 
-                    color="bg-green-500" gradient="from-gray-900 to-gray-800 hover:to-gray-700" 
-                    onClick={() => setShowActiveModal(true)}
-                />
-                <KpiCard 
-                    icon={Icons.Folder} title="Группы" 
-                    value={Object.values(groups).length} 
-                    color="bg-yellow-500" gradient="from-gray-900 to-gray-800 hover:to-gray-700"
-                    onClick={() => setShowGroupModal(true)}
-                    actionIcon={Icons.Settings}
-                />
-                <KpiCard 
-                    icon={Icons.Sparkles} title="AI Ответы" 
-                    value={aiStats.total} 
-                    color="bg-purple-500" gradient="from-gray-900 to-gray-800 hover:to-gray-700" 
-                    onClick={() => setShowAiModal(true)}
-                    actionIcon={Icons.Send}
-                />
+                <KpiCard icon={Icons.Users} title="Всего пользователей" value={Object.keys(users).length} color="bg-blue-500" gradient="from-gray-900 to-gray-800 hover:to-gray-700" onClick={() => setActiveTab && setActiveTab('users')} />
+                <KpiCard icon={Icons.Activity} title="Активные сегодня" value={activeUsers.length} color="bg-green-500" gradient="from-gray-900 to-gray-800 hover:to-gray-700" onClick={() => setShowActiveModal(true)}/>
+                <KpiCard icon={Icons.Folder} title="Группы" value={Object.values(groups).length} color="bg-yellow-500" gradient="from-gray-900 to-gray-800 hover:to-gray-700" onClick={() => setShowGroupModal(true)} actionIcon={Icons.Settings}/>
+                <KpiCard icon={Icons.Sparkles} title="AI Ответы" value={aiStats.total} color="bg-purple-500" gradient="from-gray-900 to-gray-800 hover:to-gray-700" onClick={() => setShowAiModal(true)} actionIcon={Icons.Send}/>
             </div>
 
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
                 <div className="xl:col-span-2 bg-[#121214] p-6 rounded-2xl border border-gray-800 shadow-xl">
                     <div className="flex items-center justify-between mb-6">
-                        <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                            <Icons.Calendar size={20} className="text-blue-500"/> Динамика активности
-                        </h3>
+                        <h3 className="text-lg font-bold text-white flex items-center gap-2"><Icons.Calendar size={20} className="text-blue-500"/> Динамика активности</h3>
                         <div className="flex gap-2">
-                            <button onClick={onClearAiStats} className="text-xs text-gray-500 hover:text-red-400 flex items-center gap-1 transition-colors px-2 py-1 rounded hover:bg-gray-800">
-                                <Icons.Trash2 size={12}/> Очистить
-                            </button>
+                            <button onClick={onClearAiStats} className="text-xs text-gray-500 hover:text-red-400 flex items-center gap-1 transition-colors px-2 py-1 rounded hover:bg-gray-800"><Icons.Trash2 size={12}/> Очистить</button>
                         </div>
                     </div>
                     <div className="h-[350px] w-full">
