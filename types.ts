@@ -15,9 +15,11 @@ export interface BotConfig {
     aiPersonality: string; 
     aiBehavior: string;
     aiProfanity: boolean;
-    customProfanity?: string; // New field for custom swear words
+    customProfanity?: string; // Legacy field, kept for compatibility
+    customProfanityList?: string[]; // New list field
     aiTemperature: number;
     aiMaxTokens: number;
+    aiStrictness: number; // 0 to 100 (Accuracy)
     bannedWords: string;
 }
 
@@ -25,7 +27,7 @@ export interface User {
     id: number;
     name: string;
     username?: string;
-    status: 'active' | 'banned' | 'muted';
+    status: 'active' | 'banned' | 'muted' | 'left';
     role: 'admin' | 'moderator' | 'user';
     joinDate: string;
     warnings: number;

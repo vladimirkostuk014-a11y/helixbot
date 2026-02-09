@@ -60,8 +60,10 @@ const App = () => {
         aiBehavior: 'balanced', 
         aiProfanity: false,
         customProfanity: '',
+        customProfanityList: [],
         aiTemperature: 0.3,
-        aiMaxTokens: 1000, 
+        aiMaxTokens: 1000,
+        aiStrictness: 80, // Default High Accuracy
         bannedWords: '' 
     });
     
@@ -97,7 +99,6 @@ const App = () => {
 
     const handleLogin = (e: React.FormEvent) => {
         e.preventDefault();
-        // Simple base64 encoding of input to check against hash
         try {
             const inputHash = btoa(passwordInput);
             if (inputHash === SECURE_HASH) {
@@ -114,7 +115,7 @@ const App = () => {
 
     // --- FIREBASE SUBSCRIPTIONS ---
     useEffect(() => {
-        if (!isAuthenticated) return; // Only subscribe if authenticated
+        if (!isAuthenticated) return; 
 
         const unsubs: (Function | undefined)[] = [];
         const sub = (path: string, cb: (val: any) => void) => {
@@ -163,7 +164,7 @@ const App = () => {
         return () => unsubs.forEach(fn => fn && fn());
     }, [isAuthenticated]);
 
-    // --- AUTO-SAVE (Front -> Firebase) ---
+    // --- AUTO-SAVE ---
     useEffect(() => { if (canSave('config')) saveData('config', config); }, [config, loadedSections]);
     useEffect(() => { if (canSave('users')) saveData('users', users); }, [users, loadedSections]);
     useEffect(() => { if (canSave('groups')) saveData('groups', groups); }, [groups, loadedSections]);
@@ -193,7 +194,7 @@ const App = () => {
         const emptyStats = { total: 0, history: [] };
         saveData('aiStats', emptyStats); 
         saveData('topicHistory', {});
-        saveData('topicUnreads', {}); // Clear unreads globally
+        saveData('topicUnreads', {}); 
         setAiStats(emptyStats);
         setTopicHistory({});
         setTopicUnreads({});
@@ -224,23 +225,16 @@ const App = () => {
         addLog('Группы', `Группа ${groupId} удалена`, 'danger');
     };
 
-    // FIXED: Unread Sync Logic
     const handleMarkTopicRead = (tid: string) => {
-        // 1. Reset Topic Unreads
         setTopicUnreads(prev => ({...prev, [tid]: 0}));
         saveData(`topicUnreads/${tid}`, 0);
-
-        // 2. Reset Individual User Unreads for users in this topic
-        // We find users who have sent messages in this topic's history
         const topicMsgs = topicHistory[tid] || [];
         const userIdsInTopic = new Set<number>();
         topicMsgs.forEach(msg => {
             if (msg.userId && msg.isIncoming) userIdsInTopic.add(msg.userId);
         });
-
         const updatedUsers = { ...users };
         let hasChanges = false;
-        
         userIdsInTopic.forEach(uid => {
             const user = updatedUsers[uid];
             if (user && user.unreadCount && user.unreadCount > 0) {
@@ -249,20 +243,15 @@ const App = () => {
                 hasChanges = true;
             }
         });
-
-        if (hasChanges) {
-            setUsers(updatedUsers);
-        }
+        if (hasChanges) setUsers(updatedUsers);
     };
 
     const handleLiveChatSend = async (data: { text: string; mediaUrl?: string; mediaFile?: File | null; buttons?: any[]; topicId: string }) => {
         const { text, mediaUrl, mediaFile, buttons, topicId } = data;
-        
         try {
             const markup = buttons && buttons.length > 0 ? JSON.stringify({ 
                 inline_keyboard: buttons.map(b => [{ text: b.text, url: b.url }]) 
             }) : undefined;
-            
             const threadId = topicId !== 'general' ? topicId : undefined;
 
             if (mediaFile) {
@@ -290,8 +279,6 @@ const App = () => {
                     message_thread_id: threadId
                 }, config);
             }
-
-            // Manually update local history for immediate feedback
             const newMsg = {
                 dir: 'out',
                 text: text,
@@ -302,7 +289,6 @@ const App = () => {
                 isGroup: true,
                 user: 'Admin'
             };
-            
             const updatedTopicHistory = [...(topicHistory[topicId] || []), newMsg];
             setTopicHistory(prev => ({ ...prev, [topicId]: updatedTopicHistory }));
             saveData(`topicHistory/${topicId}`, updatedTopicHistory);
@@ -313,10 +299,8 @@ const App = () => {
         }
     };
 
-    // Calculate Uptime (90s threshold)
     const isOnline = (Date.now() - lastHeartbeat) < 90000; 
 
-    // Login Screen
     if (!isAuthenticated) {
         return (
             <div className="flex h-screen bg-[#09090b] items-center justify-center p-4">
@@ -398,7 +382,7 @@ const App = () => {
                         </div>
                         <div>
                             <h1 className="text-xl font-bold text-white tracking-tight">Бот Helix</h1>
-                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v3.0</span>
+                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v9.8</span>
                         </div>
                     </div>
                 </div>
@@ -408,7 +392,6 @@ const App = () => {
                     <button onClick={() => setIsSidebarOpen(false)}><Icons.X size={24}/></button>
                 </div>
                 
-                {/* Status Box */}
                 <div className="px-6 mb-4">
                      <div className="bg-black/40 rounded-lg p-3 border border-gray-800/50 space-y-2">
                         <div className="flex items-center justify-between">
@@ -463,7 +446,6 @@ const App = () => {
                 <div className="flex-1 overflow-auto p-4 md:p-8 scroll-smooth custom-scrollbar">
                     <div className="max-w-[100%] md:max-w-[95%] mx-auto h-full">
                         {activeTab === 'dashboard' && <Dashboard users={users} groups={groups} setGroups={setGroups} aiStats={aiStats} config={config} setConfig={setConfig} isAiThinking={false} setAiStats={setAiStats} addLog={addLog} setActiveTab={setActiveTab} onStopBot={() => setIsBotActive(false)} onClearAiStats={clearAiHistory} viewMode="overview" auditLogs={auditLogs} onDeleteGroup={handleDeleteGroup} />}
-                        
                         {activeTab === 'livechat' && <LiveChat 
                             topicNames={topicNames} 
                             topicHistory={topicHistory} 
@@ -476,7 +458,6 @@ const App = () => {
                                 const h = {...topicHistory, [tid]: []}; 
                                 setTopicHistory(h); 
                                 saveData('topicHistory', h);
-                                // FORCE CLEAR UNREADS
                                 handleMarkTopicRead(tid);
                             }} 
                             onRenameTopic={(id, name) => { const n = {...topicNames, [id]: name}; setTopicNames(n); saveData('topicNames', n); }} 
@@ -494,9 +475,8 @@ const App = () => {
                             }}
                             onMarkTopicRead={handleMarkTopicRead}
                         />}
-                        
                         {activeTab === 'users' && <UserCRM users={users} setUsers={setUsers} config={config} commands={commands} topicNames={topicNames} addLog={addLog} />}
-                        {activeTab === 'broadcasts' && <Broadcasts users={users} config={config} addLog={addLog} onBroadcastSent={(uid, txt, type, url) => { /* Update user history manually here if needed */ }} />}
+                        {activeTab === 'broadcasts' && <Broadcasts users={users} config={config} addLog={addLog} onBroadcastSent={(uid, txt, type, url) => {}} />}
                         {activeTab === 'calendar' && <CalendarEvents events={calendarEvents} setEvents={handleCalendarUpdate} categories={calendarCategories} setCategories={(c) => { setCalendarCategories(c); saveData('calendarCategories', c); }} topicNames={topicNames} addLog={addLog} config={config} />}
                         {activeTab === 'commands' && <Commands commands={commands} setCommands={(c) => { setCommands(c); saveData('commands', c); }} topicNames={topicNames} />}
                         {activeTab === 'knowledge' && <KnowledgeBase items={knowledgeBase} categories={categories} setItems={(i) => { setKnowledgeBase(i); saveData('knowledgeBase', i); }} setCategories={(c) => { setCategories(c); saveData('categories', c); }} addLog={addLog} />}

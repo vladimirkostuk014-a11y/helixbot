@@ -36,7 +36,7 @@ let lastUpdateId = 0;
 const processedUpdates = new Set();
 const sentCalendarNotifications = new Set();
 
-console.log("🔥 [SERVER] Запуск сервера Helix (v9.0 Optimized)...");
+console.log("🔥 [SERVER] Запуск сервера Helix (v9.8 Final)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -94,6 +94,8 @@ const sendMessage = async (chatId, text, options = {}) => {
 };
 
 const sendPhoto = async (chatId, photoUrl, caption, options = {}) => {
+    // If photoUrl is base64, this might fail unless using formData, but for simplicity assuming URL here or already uploaded.
+    // If it's a URL or File ID:
     return await apiCall('sendPhoto', { chat_id: chatId, photo: photoUrl, caption, parse_mode: 'HTML', ...options });
 };
 
@@ -108,28 +110,20 @@ const restrictUser = async (chatId, userId, permissions, untilDate = 0) => {
 };
 
 // ==========================================
-// 4. CRON ЗАДАЧИ (MOSCOW TIME)
+// 4. CRON ЗАДАЧИ
 // ==========================================
 const runCronJobs = async () => {
-    // Force Moscow Time
     const moscowNow = new Date().toLocaleString("en-US", {timeZone: "Europe/Moscow"});
     const now = new Date(moscowNow);
+    const timeString = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const dateString = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     
-    // Format: HH:mm (24h) and YYYY-MM-DD
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const timeString = `${hours}:${minutes}`;
-    
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const dateString = `${year}-${month}-${day}`;
-    
-    // Daily Cleanup at Midnight Moscow Time
+    // Daily Cleanup
     if (timeString === '00:00') {
         try {
             await set(ref(db, 'topicHistory'), {});
             await set(ref(db, 'topicUnreads'), {});
+            // Reset daily counters
             const usersRef = ref(db, 'users');
             const snapshot = await get(usersRef);
             const users = snapshot.val();
@@ -168,7 +162,7 @@ setInterval(runCronJobs, 30000);
 // ==========================================
 // 5. CRM & HISTORY
 // ==========================================
-const updateUserHistory = async (user, message) => {
+const updateUserHistory = async (user, message, isLeaving = false) => {
     try {
         const userId = user.id;
         if (userId < 0) return;
@@ -182,19 +176,21 @@ const updateUserHistory = async (user, message) => {
             name: user.first_name || 'Unknown',
             username: user.username || '', 
             role: state.config.adminIds?.includes(String(userId)) ? 'admin' : (existingUser.role || 'user'),
-            status: existingUser.status || 'active', 
+            status: isLeaving ? 'left' : (existingUser.status || 'active'), 
             warnings: existingUser.warnings || 0,
             history: Array.isArray(existingUser.history) ? existingUser.history : [],
-            msgCount: (existingUser.msgCount || 0) + 1,
-            dailyMsgCount: (existingUser.dailyMsgCount || 0) + 1,
+            msgCount: (existingUser.msgCount || 0) + (isLeaving ? 0 : 1),
+            dailyMsgCount: (existingUser.dailyMsgCount || 0) + (isLeaving ? 0 : 1),
             lastSeen: new Date().toLocaleTimeString('ru-RU')
         };
-
-        const newHistory = [...currentUser.history, message].slice(-50); 
-        currentUser.history = newHistory;
         
-        if (message.dir === 'in') currentUser.unreadCount = (existingUser.unreadCount || 0) + 1;
-        else currentUser.unreadCount = 0;
+        // Add new message to history only if not just updating status
+        if (message) {
+             const newHistory = [...currentUser.history, message].slice(-50); 
+             currentUser.history = newHistory;
+             if (message.dir === 'in') currentUser.unreadCount = (existingUser.unreadCount || 0) + 1;
+             else currentUser.unreadCount = 0;
+        }
 
         await set(ref(db, userPath), currentUser);
     } catch (e) { console.error("CRM Update Error:", e); }
@@ -225,15 +221,14 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
 };
 
 // ==========================================
-// 6. AI (STRICT MODE + GRAMMAR FIX + LENGTH FIX)
+// 6. AI (UPDATED)
 // ==========================================
 const getAIResponse = async (question, userName) => {
-    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiBehavior, aiTemperature, customProfanity } = state.config;
+    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiBehavior, aiTemperature, aiStrictness, customProfanityList } = state.config;
     if (!openaiApiKey) return "⚠️ Ключ AI не настроен.";
 
     const context = state.knowledgeBase.map(k => `[INFO] Q: ${k.title} -> A: ${k.response}`).join('\n');
     
-    // Identity Construction
     let identity = "Ты полезный помощник Хеликс.";
     switch (aiPersonality) {
         case 'angry': identity = "Ты злой, токсичный бот. Грубишь всем."; break;
@@ -241,46 +236,42 @@ const getAIResponse = async (question, userName) => {
         case 'gopnik': identity = "Ты реальный пацанчик. Используй сленг 'слышь', 'братишка'."; break;
         case 'kind': identity = "Ты милый, заботливый, используешь сердечки."; break;
         case 'philosopher': identity = "Ты философ. Говоришь загадками о вечном."; break;
-        case 'cyberpunk': identity = "Ты кибер-имплант из 2077. Сленг: 'хром', 'дека'."; break;
         case 'official': identity = "Ты сухой бюрократ. Формальный стиль."; break;
     }
 
-    let profanityInstr = aiProfanity 
-        ? `ОБЯЗАТЕЛЬНО используй мат в стиле своей личности.${customProfanity ? ' Используй также: ' + customProfanity : ''}` 
-        : "Мат запрещен.";
-
-    // Logic to enforce length via tokens AND system prompt
-    let style = "Отвечай 2-3 предложениями.";
-    let maxTokens = 600;
-
-    if (aiBehavior === 'concise') {
-        style = "Отвечай МАКСИМАЛЬНО КОРОТКО. Только 1 предложение.";
-        maxTokens = 150;
+    // --- Custom Profanity Injection ---
+    let randomPhrase = "";
+    if (aiProfanity && customProfanityList && customProfanityList.length > 0) {
+        const randIndex = Math.floor(Math.random() * customProfanityList.length);
+        randomPhrase = `Вставь в ответ эту фразу (или её вариацию): "${customProfanityList[randIndex]}".`;
     }
-    if (aiBehavior === 'detailed') {
-        style = "Отвечай подробно, используй абзацы и списки. Развернутый ответ.";
-        maxTokens = 1500;
-    }
-    if (aiBehavior === 'bullet') {
-        style = "Отвечай только маркированным списком по пунктам.";
-        maxTokens = 800;
+
+    // --- Accuracy/Strictness Logic ---
+    // High strictness (80-100) -> Low Temp (0.1), Strict Prompt
+    // Low strictness (0-30) -> High Temp (0.7), Creative Prompt
+    const accuracy = aiStrictness || 80;
+    const temp = Math.max(0.1, Math.min(0.9, 1 - (accuracy / 100)));
+    
+    let strictPrompt = "";
+    if (accuracy >= 80) {
+        strictPrompt = "STRICTLY use the KNOWLEDGE BASE. If the answer is not there, say 'I don't know'. DO NOT INVENT FACTS.";
+    } else if (accuracy >= 50) {
+        strictPrompt = "Use the KNOWLEDGE BASE primarily. If info is missing, you can make reasonable assumptions based on game lore.";
+    } else {
+        strictPrompt = "Be creative. You can invent details if needed to make the answer fun.";
     }
 
     const systemPrompt = `
     ROLE: ${identity}
-    ${profanityInstr}
+    ${randomPhrase}
     
-    CRITICAL INSTRUCTIONS:
-    1. LANGUAGE: Use PERFECT RUSSIAN grammar. No spelling errors.
-    2. LENGTH/STYLE: ${style}
+    INSTRUCTIONS:
+    1. Language: PERFECT RUSSIAN.
+    2. ${strictPrompt}
+    3. Length: ${aiBehavior === 'concise' ? 'Short (1 sentence)' : aiBehavior === 'detailed' ? 'Detailed (paragraphs)' : 'Normal (2-3 sentences)'}.
     
-    KNOWLEDGE BASE (CONTEXT):
+    KNOWLEDGE BASE:
     ${context}
-
-    STRICT RULES:
-    - IF the answer is found in the KNOWLEDGE BASE, use it.
-    - IF the answer is NOT in the KNOWLEDGE BASE, you MUST say "Я не знаю" (or similar in your personality). 
-    - DO NOT INVENT FACTS. DO NOT HALLUCINATE.
     `;
 
     try {
@@ -290,32 +281,18 @@ const getAIResponse = async (question, userName) => {
             body: JSON.stringify({
                 model: aiModel || "llama-3.3-70b-versatile",
                 messages: [{ role: "system", content: systemPrompt }, { role: "user", content: question }],
-                temperature: aiTemperature || 0.4, 
-                max_tokens: maxTokens
+                temperature: temp, 
+                max_tokens: state.config.aiMaxTokens || 600
             })
         });
         
-        if (response.status === 429) {
-             if (aiPersonality === 'gopnik') return "Тормози, братишка! Я перегрелся. Жди.";
-             if (aiPersonality === 'official') return "Лимит запросов исчерпан. Ожидайте.";
-             return "Слишком много запросов. Дайте мне минуту.";
-        }
-
-        if (!response.ok) {
-            console.error("AI API Error:", response.status);
-            return "Ошибка AI (сбой сети).";
-        }
-        
         const data = await response.json();
-        return data.choices?.[0]?.message?.content || "Ошибка: Пустой ответ AI.";
-    } catch (e) { 
-        console.error("AI Network Error:", e);
-        return "Ошибка сети при запросе к AI."; 
-    }
+        return data.choices?.[0]?.message?.content || "Ошибка AI.";
+    } catch (e) { return "Ошибка сети AI."; }
 };
 
 // ==========================================
-// 7. СИСТЕМНЫЕ КОМАНДЫ (FIXED)
+// 7. СИСТЕМНЫЕ КОМАНДЫ (SYNCED)
 // ==========================================
 const handleSystemCommand = async (command, msg, threadId) => {
     const chatId = msg.chat.id;
@@ -327,6 +304,7 @@ const handleSystemCommand = async (command, msg, threadId) => {
 
         if (command === '/warn') {
             const userPath = `users/${targetUser.id}`;
+            // FORCE FETCH FROM DB TO ENSURE SYNC
             const userSnap = await get(ref(db, userPath));
             const userData = userSnap.val() || {};
             const newWarns = (userData.warnings || 0) + 1;
@@ -345,7 +323,46 @@ const handleSystemCommand = async (command, msg, threadId) => {
                 return sendMessage(chatId, `⚠️ <b>${targetUser.first_name}</b>, предупреждение (${newWarns}/3).`, { message_thread_id: threadId });
             }
         }
+        
+        if (command === '/unwarn') {
+            const userPath = `users/${targetUser.id}`;
+            const userSnap = await get(ref(db, userPath));
+            const userData = userSnap.val() || {};
+            const newWarns = Math.max(0, (userData.warnings || 0) - 1);
+            
+            await firebaseUpdate(ref(db, userPath), { warnings: newWarns });
+            return sendMessage(chatId, `🕊 <b>${targetUser.first_name}</b>, предупреждение снято. (${newWarns}/3).`, { message_thread_id: threadId });
+        }
     }
+};
+
+const handleDailyTop = async (chatId, threadId) => {
+    try {
+        const snapshot = await get(ref(db, 'users'));
+        const users = snapshot.val();
+        if (!users) return;
+        
+        const sorted = Object.values(users)
+            .filter(u => u.dailyMsgCount > 0 && u.id > 0)
+            .sort((a, b) => b.dailyMsgCount - a.dailyMsgCount)
+            .slice(0, 10);
+            
+        if (sorted.length === 0) {
+            await sendMessage(chatId, "📉 Сегодня активности еще не было.", { message_thread_id: threadId });
+            return;
+        }
+        
+        let msg = "🏆 <b>Топ 10 активистов за день:</b>\n\n";
+        sorted.forEach((u, i) => {
+            let medal = '▫️';
+            if (i===0) medal = '🥇';
+            if (i===1) medal = '🥈';
+            if (i===2) medal = '🥉';
+            msg += `${medal} <b>${u.name}</b>: ${u.dailyMsgCount} сбщ.\n`;
+        });
+        
+        await sendMessage(chatId, msg, { message_thread_id: threadId });
+    } catch (e) { console.error(e); }
 };
 
 // ==========================================
@@ -357,79 +374,84 @@ const processUpdate = async (tgUpdate) => {
 
     const chatId = String(msg.chat.id);
     const targetChatId = String(state.config.targetChatId);
-    const isPrivate = msg.chat.type === 'private';
-
-    if (!isPrivate && chatId !== targetChatId) {
-        return; 
+    
+    // --- 1. MEMBER JOIN / LEAVE LOGIC ---
+    if (msg.new_chat_members) {
+        for (const member of msg.new_chat_members) {
+            if (!member.is_bot) {
+                // Add to DB immediately
+                await updateUserHistory(member, null);
+                
+                // Check for _welcome_ command
+                const welcomeCmd = state.commands.find(c => c.trigger === '_welcome_');
+                if (welcomeCmd) {
+                    const text = welcomeCmd.response.replace(/{user}/g, member.first_name);
+                    const markup = welcomeCmd.buttons && welcomeCmd.buttons.length > 0 
+                        ? { inline_keyboard: welcomeCmd.buttons.map(b => [{ text: b.text, url: b.url }]) } 
+                        : undefined;
+                    
+                    if (welcomeCmd.mediaUrl) {
+                        await sendPhoto(chatId, welcomeCmd.mediaUrl, text, { reply_markup: markup });
+                    } else {
+                        await sendMessage(chatId, text, { reply_markup: markup });
+                    }
+                }
+            }
+        }
+    }
+    
+    if (msg.left_chat_member) {
+        const member = msg.left_chat_member;
+        if (!member.is_bot) {
+            await updateUserHistory(member, null, true); // true = isLeaving
+        }
     }
 
+    // --- 2. MESSAGE PROCESSING ---
     const threadId = msg.message_thread_id ? String(msg.message_thread_id) : 'general';
     const text = (msg.text || msg.caption || '').trim();
     const user = msg.from;
+    const isPrivate = msg.chat.type === 'private';
+    
+    if (!isPrivate && chatId !== targetChatId) return;
 
-    const logMsg = {
-        dir: 'in', text: text || `[Media]`, type: msg.photo ? 'photo' : 'text',
-        time: new Date().toLocaleTimeString('ru-RU'),
-        isGroup: !isPrivate, user: user.first_name, userId: user.id
-    };
+    if (text || msg.photo) {
+        const logMsg = {
+            dir: 'in', text: text || `[Media]`, type: msg.photo ? 'photo' : 'text',
+            time: new Date().toLocaleTimeString('ru-RU'),
+            isGroup: !isPrivate, user: user.first_name, userId: user.id
+        };
+        await updateUserHistory(user, logMsg);
+        if (!isPrivate) await updateTopicHistory(threadId, { ...logMsg, isIncoming: true }, null);
+    }
 
-    await updateUserHistory(user, logMsg);
-    if (!isPrivate) await updateTopicHistory(threadId, { ...logMsg, isIncoming: true }, null);
-
-    if (user.is_bot) return;
-    if (!state.isBotActive) return;
+    if (user.is_bot || !state.isBotActive) return;
 
     if (text) {
         const lowerText = text.toLowerCase();
         
-        // --- COMMANDS PROCESSING (DYNAMIC) ---
-        // Checks if message matches any command in Database
+        // --- COMMANDS ---
         for (const cmd of state.commands) {
             if (cmd.matchType === 'exact' && lowerText === cmd.trigger.toLowerCase()) {
-                // Handle Placeholders: {user} and {target}
-                let responseText = cmd.response;
-                
-                // Determine target name if needed
-                let targetName = "воздух";
-                if (msg.reply_to_message && msg.reply_to_message.from) {
-                    targetName = msg.reply_to_message.from.first_name;
-                } else {
-                    const parts = text.split(' ');
-                    if (parts.length > 1) {
-                        targetName = parts.slice(1).join(' ').replace('@', '');
-                    }
+                if (cmd.trigger === '_daily_top_') {
+                    await handleDailyTop(chatId, threadId !== 'general' ? threadId : undefined);
+                    return;
                 }
-                
-                responseText = responseText.replace(/{user}/g, user.first_name)
-                                           .replace(/{target}/g, targetName);
 
-                await sendMessage(chatId, responseText, { message_thread_id: threadId !== 'general' ? threadId : undefined });
+                let responseText = cmd.response.replace(/{user}/g, user.first_name);
+                const markup = cmd.buttons?.length > 0 ? { inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
+                const opts = { message_thread_id: threadId !== 'general' ? threadId : undefined, reply_markup: markup };
+
+                if (cmd.type === 'photo' && cmd.mediaUrl) {
+                    await sendPhoto(chatId, cmd.mediaUrl, responseText, opts);
+                } else {
+                    await sendMessage(chatId, responseText, opts);
+                }
                 return;
             }
         }
 
-        // --- HARDCODED FALLBACK FOR /SLAP IF NOT IN DB ---
-        // This fixes the "Group!" issue immediately even if user hasn't added command to DB
-        if (lowerText.startsWith('/лещ') || lowerText.startsWith('/slap')) {
-            let targetName = "воздух";
-            
-            if (msg.reply_to_message && msg.reply_to_message.from) {
-                targetName = msg.reply_to_message.from.first_name;
-            } else {
-                const parts = text.split(' ');
-                if (parts.length > 1) {
-                    targetName = parts.slice(1).join(' ').replace('@', '');
-                }
-            }
-            // Filter out accidental group titles or empty
-            if (!targetName || targetName === "Group") targetName = "чат"; 
-
-            const replyText = `👋 <b>${user.first_name}</b> отвесил смачного леща <b>${targetName}</b>!`;
-            await sendMessage(chatId, replyText, { message_thread_id: threadId !== 'general' ? threadId : undefined });
-            return;
-        }
-
-        if (['/warn', '/mute', '/ban', '/unmute'].some(c => lowerText.startsWith(c))) {
+        if (['/warn', '/unwarn', '/mute', '/ban', '/unmute'].some(c => lowerText.startsWith(c))) {
             const cmd = lowerText.split(' ')[0];
             if (state.config.adminIds && state.config.adminIds.includes(String(user.id))) {
                 await handleSystemCommand(cmd, msg, threadId !== 'general' ? threadId : undefined);
@@ -437,14 +459,17 @@ const processUpdate = async (tgUpdate) => {
             }
         }
 
-        // AI RESPONSE
+        // --- AI TRIGGER CHECK ---
         if (state.config.enableAI) {
-            const isMention = lowerText.includes('хеликс') || lowerText.includes('helix') || (isPrivate && state.config.enablePM);
+            const isMention = lowerText.startsWith('хеликс') || lowerText.startsWith('helix') || (isPrivate && state.config.enablePM);
             const isDisabled = state.disabledAiTopics.includes(threadId);
 
             if (isMention && !isDisabled) {
-                const question = text.replace(/хеликс|helix/gi, '').trim();
-                const answer = await getAIResponse(question || "Привет", user.first_name);
+                // Remove trigger word
+                const question = text.replace(/^(хеликс|helix)/i, '').trim();
+                if (!question) return; // Ignore just name
+
+                const answer = await getAIResponse(question, user.first_name);
                 
                 await sendMessage(chatId, answer, { 
                     reply_to_message_id: msg.message_id,
@@ -454,7 +479,7 @@ const processUpdate = async (tgUpdate) => {
                 // AI Stats & History
                 const curHistRaw = state.aiStats?.history;
                 const curHist = Array.isArray(curHistRaw) ? curHistRaw : [];
-                const newStat = { query: question || "Привет", response: answer, time: Date.now() };
+                const newStat = { query: question, response: answer, time: Date.now() };
 
                 await set(ref(db, 'aiStats'), { 
                     total: (state.aiStats?.total || 0) + 1, 

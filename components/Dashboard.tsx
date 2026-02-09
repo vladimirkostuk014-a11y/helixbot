@@ -30,6 +30,9 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     const [showAiModal, setShowAiModal] = useState(false);
     const [aiModalTab, setAiModalTab] = useState<'history' | 'top'>('history');
     
+    // Profanity List State
+    const [newProfanityWord, setNewProfanityWord] = useState('');
+    
     // AI Playground State
     const [showPlayground, setShowPlayground] = useState(false);
     const [playgroundInput, setPlaygroundInput] = useState('');
@@ -105,6 +108,21 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         }
     };
     
+    const handleAddProfanity = () => {
+        if (newProfanityWord.trim()) {
+            const currentList = config.customProfanityList || [];
+            if (!currentList.includes(newProfanityWord.trim())) {
+                setConfig({ ...config, customProfanityList: [...currentList, newProfanityWord.trim()] });
+            }
+            setNewProfanityWord('');
+        }
+    };
+
+    const handleRemoveProfanity = (word: string) => {
+        const currentList = config.customProfanityList || [];
+        setConfig({ ...config, customProfanityList: currentList.filter(w => w !== word) });
+    };
+
     const getActivityData = () => {
         const today = new Date();
         const year = today.getFullYear();
@@ -170,7 +188,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                         </h2>
                     </div>
                     
-                    <div className="space-y-4 relative z-10 flex-1 overflow-y-auto custom-scrollbar pr-2">
+                    <div className="space-y-6 relative z-10 flex-1 overflow-y-auto custom-scrollbar pr-2 pb-20">
                         
                         {/* New Model Selector */}
                         <div>
@@ -181,66 +199,95 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                             </select>
                             <p className="text-[10px] text-gray-500 mt-1">70B умнее и лучше держит контекст. 8B работает быстрее.</p>
                         </div>
-
-                        <div>
-                            <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Личность (Характер)</label>
-                            <select value={config.aiPersonality || 'helpful'} onChange={e => setConfig({...config, aiPersonality: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
-                                <option value="helpful">😄 Хеликс (Обычный, Полезный)</option>
-                                <option value="kind">💖 Добряк (Поддержка, Милый)</option>
-                                <option value="official">🧐 Официальный (Бюрократ)</option>
-                                <option value="joker">🤡 Шутник (Сарказм, Тролль)</option>
-                                <option value="angry">😡 Злой (Агрессивный, Токсик)</option>
-                                <option value="philosopher">🤔 Философ (Загадки)</option>
-                                <option value="cyberpunk">🤖 Киберпанк (Нетраннер)</option>
-                                <option value="gopnik">🍺 Гопник (Мат, Сленг)</option>
-                            </select>
-                        </div>
                         
+                        {/* AI Accuracy / Strictness Slider */}
                         <div>
-                            <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Стиль ответа (Длина)</label>
-                            <select value={config.aiBehavior || 'balanced'} onChange={e => setConfig({...config, aiBehavior: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
-                                <option value="balanced">⚖️ Сбалансированный (2-3 предл.)</option>
-                                <option value="concise">⚡ Коротко и ясно (1 предл.)</option>
-                                <option value="detailed">📜 Подробно (Абзацы)</option>
-                                <option value="bullet">📝 Списком (Факты)</option>
-                            </select>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
-                                 <label className="flex items-center gap-3 cursor-pointer p-2 rounded hover:bg-gray-800 transition-colors border border-gray-800 hover:border-red-500/30">
-                                    <input type="checkbox" checked={config.aiProfanity || false} onChange={e => setConfig({...config, aiProfanity: e.target.checked})} className="accent-red-500 w-4 h-4"/>
-                                    <span className="text-sm text-red-300 font-bold">🤬 Режим мата (18+)</span>
-                                </label>
+                            <div className="flex justify-between mb-1">
+                                <label className="text-xs text-gray-400 font-bold uppercase block">Точность / Строгость</label>
+                                <span className={`text-xs font-bold ${config.aiStrictness >= 80 ? 'text-green-500' : config.aiStrictness >= 50 ? 'text-yellow-500' : 'text-red-500'}`}>
+                                    {config.aiStrictness || 80}%
+                                </span>
                             </div>
-                            <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
-                                 <label className="flex items-center gap-3 cursor-pointer p-2 rounded hover:bg-gray-800 transition-colors border border-gray-800 hover:border-blue-500/30">
-                                    <input type="checkbox" checked={config.enablePM || false} onChange={e => setConfig({...config, enablePM: e.target.checked})} className="accent-blue-500 w-4 h-4"/>
-                                    <span className="text-sm text-blue-300 font-bold">📩 Отвечать в ЛС</span>
-                                </label>
+                            <input 
+                                type="range" 
+                                min="0" 
+                                max="100" 
+                                step="10"
+                                value={config.aiStrictness || 80} 
+                                onChange={e => setConfig({...config, aiStrictness: parseInt(e.target.value)})}
+                                className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                            />
+                            <div className="flex justify-between text-[10px] text-gray-500 mt-1">
+                                <span>Креатив (Выдумывает)</span>
+                                <span>Баланс</span>
+                                <span>Только факты (БЗ)</span>
                             </div>
                         </div>
 
-                        {/* Custom Profanity Field */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Личность</label>
+                                <select value={config.aiPersonality || 'helpful'} onChange={e => setConfig({...config, aiPersonality: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
+                                    <option value="helpful">😄 Хеликс (Обычный)</option>
+                                    <option value="kind">💖 Добряк</option>
+                                    <option value="official">🧐 Официальный</option>
+                                    <option value="joker">🤡 Шутник</option>
+                                    <option value="angry">😡 Злой</option>
+                                    <option value="gopnik">🍺 Гопник</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Длина ответа</label>
+                                <select value={config.aiBehavior || 'balanced'} onChange={e => setConfig({...config, aiBehavior: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
+                                    <option value="balanced">⚖️ 2-3 предложения</option>
+                                    <option value="concise">⚡ Коротко (1 предл.)</option>
+                                    <option value="detailed">📜 Подробно</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-4">
+                            <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-gray-900/50 border border-gray-700 hover:border-red-500/50 transition-colors">
+                                <input type="checkbox" checked={config.aiProfanity || false} onChange={e => setConfig({...config, aiProfanity: e.target.checked})} className="accent-red-500 w-5 h-5"/>
+                                <span className="text-sm text-red-300 font-bold">🤬 Режим мата</span>
+                            </label>
+                            <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-gray-900/50 border border-gray-700 hover:border-blue-500/50 transition-colors">
+                                <input type="checkbox" checked={config.enablePM || false} onChange={e => setConfig({...config, enablePM: e.target.checked})} className="accent-blue-500 w-5 h-5"/>
+                                <span className="text-sm text-blue-300 font-bold">📩 Отвечать в ЛС</span>
+                            </label>
+                        </div>
+
+                        {/* Custom Profanity List Manager */}
                          {config.aiProfanity && (
-                            <div className="animate-slideIn">
-                                <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Свои словечки (через запятую)</label>
-                                <textarea 
-                                    value={config.customProfanity || ''} 
-                                    onChange={e => setConfig({...config, customProfanity: e.target.value})}
-                                    placeholder="Например: блин, капец, ё-моё (или жестче)"
-                                    className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-red-500 outline-none transition-colors h-20 resize-none"
-                                />
-                                <p className="text-[10px] text-gray-500 mt-1">Хеликс будет иногда использовать эти слова в диалогах.</p>
+                            <div className="bg-gray-900/30 p-4 rounded-xl border border-gray-700 animate-slideIn">
+                                <label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Свои словечки (База)</label>
+                                <div className="flex gap-2 mb-2">
+                                    <input 
+                                        value={newProfanityWord} 
+                                        onChange={e => setNewProfanityWord(e.target.value)} 
+                                        onKeyDown={e => e.key === 'Enter' && handleAddProfanity()}
+                                        placeholder="Добавить фразу..." 
+                                        className="flex-1 bg-black border border-gray-600 rounded px-3 py-1.5 text-sm text-white focus:border-red-500 outline-none"
+                                    />
+                                    <button onClick={handleAddProfanity} className="bg-red-900/40 text-red-300 border border-red-500/30 px-3 rounded text-sm hover:bg-red-900/60"><Icons.Plus size={16}/></button>
+                                </div>
+                                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto custom-scrollbar p-1">
+                                    {(config.customProfanityList || []).map((word, i) => (
+                                        <span key={i} className="bg-red-900/20 text-red-200 border border-red-800 px-2 py-1 rounded text-xs flex items-center gap-2">
+                                            {word}
+                                            <button onClick={() => handleRemoveProfanity(word)} className="hover:text-white"><Icons.X size={12}/></button>
+                                        </span>
+                                    ))}
+                                    {(!config.customProfanityList || config.customProfanityList.length === 0) && <span className="text-gray-500 text-xs italic">Список пуст</span>}
+                                </div>
                             </div>
                         )}
 
-                         <div className="flex gap-2 mt-auto pt-6">
-                            <button onClick={() => setShowPlayground(true)} className="flex-1 bg-gradient-to-r from-gray-900 to-gray-800 hover:from-gray-800 hover:to-gray-700 text-purple-300 border border-purple-900/30 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg flex items-center justify-center gap-2 group">
-                                <Icons.Terminal size={18} className="text-purple-500 group-hover:scale-110 transition-transform"/>
-                                <span>Тест Личности</span>
+                         <div className="flex gap-2 pt-4">
+                            <button onClick={() => setShowPlayground(true)} className="flex-1 bg-gray-800 text-purple-300 border border-purple-900/30 py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-gray-700">
+                                <Icons.Terminal size={18}/> Тест
                             </button>
-                            <button onClick={() => handleSave('ai')} className="flex-[2] bg-purple-600 hover:bg-purple-500 text-white py-2 rounded-xl text-sm font-bold transition-colors shadow-lg shadow-purple-900/20">
+                            <button onClick={() => handleSave('ai')} className="flex-[2] bg-purple-600 hover:bg-purple-500 text-white py-3 rounded-xl font-bold shadow-lg shadow-purple-900/20">
                                 {aiSaveStatus || 'Сохранить настройки'}
                             </button>
                         </div>
@@ -280,101 +327,12 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
 
     return (
         <div className="space-y-8 relative">
-            {/* ... (Active Users Modal & Groups Modal - same as previous, omitted for brevity) ... */}
-            {/* Keep existing modals code here, just ensuring structure is valid */}
-            {showActiveModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowActiveModal(false)}>
-                    {/* ... Active Users Modal Content ... */}
-                    <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl p-6 animate-slideIn" onClick={e => e.stopPropagation()}>
-                         <div className="flex justify-between items-center mb-6">
-                            <h3 className="text-lg font-bold text-white flex items-center gap-2"><Icons.Activity size={20} className="text-green-500"/> Активность</h3>
-                            <button onClick={() => setShowActiveModal(false)}><Icons.X size={20} className="text-gray-500 hover:text-white"/></button>
-                        </div>
-                        <div className="max-h-[500px] overflow-y-auto custom-scrollbar space-y-2">
-                            {activeUsers.length === 0 ? <p className="text-gray-500 text-center">Нет активности</p> : 
-                            activeUsers.map((u, i) => (
-                                <div key={u.id} className="flex items-center justify-between p-3 bg-gray-900 rounded-lg border border-gray-800">
-                                    <div className="text-white text-sm font-bold">{i+1}. {u.name}</div>
-                                    <div className="text-green-400 font-bold">{u.dailyMsgCount} сбщ</div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            )}
-            
-            {showGroupModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowGroupModal(false)}>
-                     <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-3xl shadow-2xl p-6 animate-slideIn" onClick={e => e.stopPropagation()}>
-                        <div className="flex justify-between items-center mb-6">
-                            <h3 className="text-lg font-bold text-white flex items-center gap-2"><Icons.Folder size={20} className="text-yellow-500"/> Группы</h3>
-                            <button onClick={() => setShowGroupModal(false)}><Icons.X size={20} className="text-gray-500 hover:text-white"/></button>
-                        </div>
-                        <div className="max-h-[500px] overflow-y-auto custom-scrollbar space-y-3">
-                            {(Object.values(groups) as Group[]).map((g) => (
-                                <div key={g.id} className="flex items-center justify-between p-4 bg-gray-900 rounded-lg border border-gray-800">
-                                    <div className="text-white font-bold">{g.title}</div>
-                                    <div className="flex gap-2">
-                                        <button onClick={() => toggleGroup(String(g.id))} className={`px-3 py-1 rounded text-xs ${g.isDisabled ? 'bg-red-900 text-red-300' : 'bg-green-900 text-green-300'}`}>{g.isDisabled ? 'OFF' : 'ON'}</button>
-                                        <button onClick={() => { if(window.confirm('Выйти?')) onDeleteGroup?.(String(g.id)); }} className="p-1 text-gray-500 hover:text-red-500"><Icons.Trash2 size={16}/></button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* AI Modal (Updated with Send Report Button) */}
-            {showAiModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowAiModal(false)}>
-                    <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-4xl shadow-2xl animate-slideIn p-6" onClick={e => e.stopPropagation()}>
-                        <div className="flex justify-between items-center mb-4">
-                            <h3 className="text-lg font-bold text-white flex items-center gap-2"><Icons.Sparkles size={20} className="text-purple-500"/> Статистика AI</h3>
-                            <div className="flex gap-2">
-                                <button onClick={handleSendTopToAdmins} className="bg-purple-900/40 hover:bg-purple-900/60 text-purple-300 border border-purple-500/30 px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1">
-                                    <Icons.Send size={14}/> Отправить ТОП Админам
-                                </button>
-                                <button onClick={() => setShowAiModal(false)}><Icons.X size={20} className="text-gray-500 hover:text-white"/></button>
-                            </div>
-                        </div>
-                        
-                        <div className="flex gap-2 mb-4 bg-gray-900 p-1 rounded-lg">
-                            <button onClick={() => setAiModalTab('history')} className={`flex-1 py-1.5 rounded text-sm font-bold transition-colors ${aiModalTab === 'history' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}>История</button>
-                            <button onClick={() => setAiModalTab('top')} className={`flex-1 py-1.5 rounded text-sm font-bold transition-colors ${aiModalTab === 'top' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}>ТОП Вопросов</button>
-                        </div>
-
-                        {aiModalTab === 'history' && (
-                            <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar">
-                                {(aiStats.history || []).filter(h => !h.cleared).slice(0, 100).map((h, i) => (
-                                    <div key={i} className="bg-gray-900 p-4 rounded-lg border border-gray-800">
-                                        <div className="flex justify-between text-xs text-gray-500 mb-2"><span>#{i+1}</span><span>{new Date(h.time).toLocaleString('ru-RU')}</span></div>
-                                        <div className="text-white text-sm font-bold mb-1">Q: {h.query}</div>
-                                        <div className="text-gray-400 text-sm pl-2 border-l-2 border-purple-900 whitespace-pre-wrap">A: {h.response}</div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-
-                         {aiModalTab === 'top' && (
-                            <div className="space-y-2 max-h-[500px] overflow-y-auto custom-scrollbar">
-                                {getTopQuestions().slice(0, 50).map((item, i) => (
-                                    <div key={i} className="bg-gray-900 p-4 rounded-lg border border-gray-800 flex items-center justify-between">
-                                        <div className="text-white text-sm font-bold">{i+1}. {item.query}</div>
-                                        <div className="bg-purple-900/40 text-purple-300 px-3 py-1 rounded text-sm font-bold">{item.count} раз</div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                </div>
-            )}
-            
-            {/* KPI Cards and Charts */}
+            {/* ... (Existing Cards and Charts) ... */}
+            {/* KPI Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 <KpiCard 
                     icon={Icons.Users} title="Всего пользователей" 
-                    value={Object.keys(users).length} 
+                    value={userArray.length} 
                     color="bg-blue-500" gradient="from-gray-900 to-gray-800 hover:to-gray-700"
                     onClick={() => setActiveTab && setActiveTab('users')} 
                 />
@@ -463,6 +421,93 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                 </div>
             </div>
+
+            {/* KEEP EXISTING MODALS (Group, Active, AI) */}
+            {showActiveModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowActiveModal(false)}>
+                    <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl p-6 animate-slideIn" onClick={e => e.stopPropagation()}>
+                         <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-lg font-bold text-white flex items-center gap-2"><Icons.Activity size={20} className="text-green-500"/> Активность</h3>
+                            <button onClick={() => setShowActiveModal(false)}><Icons.X size={20} className="text-gray-500 hover:text-white"/></button>
+                        </div>
+                        <div className="max-h-[500px] overflow-y-auto custom-scrollbar space-y-2">
+                            {activeUsers.length === 0 ? <p className="text-gray-500 text-center">Нет активности</p> : 
+                            activeUsers.map((u, i) => (
+                                <div key={u.id} className="flex items-center justify-between p-3 bg-gray-900 rounded-lg border border-gray-800">
+                                    <div className="text-white text-sm font-bold">{i+1}. {u.name}</div>
+                                    <div className="text-green-400 font-bold">{u.dailyMsgCount} сбщ</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+            
+            {showGroupModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowGroupModal(false)}>
+                     <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-3xl shadow-2xl p-6 animate-slideIn" onClick={e => e.stopPropagation()}>
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-lg font-bold text-white flex items-center gap-2"><Icons.Folder size={20} className="text-yellow-500"/> Группы</h3>
+                            <button onClick={() => setShowGroupModal(false)}><Icons.X size={20} className="text-gray-500 hover:text-white"/></button>
+                        </div>
+                        <div className="max-h-[500px] overflow-y-auto custom-scrollbar space-y-3">
+                            {(Object.values(groups) as Group[]).map((g) => (
+                                <div key={g.id} className="flex items-center justify-between p-4 bg-gray-900 rounded-lg border border-gray-800">
+                                    <div className="text-white font-bold">{g.title}</div>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => toggleGroup(String(g.id))} className={`px-3 py-1 rounded text-xs ${g.isDisabled ? 'bg-red-900 text-red-300' : 'bg-green-900 text-green-300'}`}>{g.isDisabled ? 'OFF' : 'ON'}</button>
+                                        <button onClick={() => { if(window.confirm('Выйти?')) onDeleteGroup?.(String(g.id)); }} className="p-1 text-gray-500 hover:text-red-500"><Icons.Trash2 size={16}/></button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showAiModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowAiModal(false)}>
+                    <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-4xl shadow-2xl animate-slideIn p-6" onClick={e => e.stopPropagation()}>
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-lg font-bold text-white flex items-center gap-2"><Icons.Sparkles size={20} className="text-purple-500"/> Статистика AI</h3>
+                            <div className="flex gap-2">
+                                <button onClick={handleSendTopToAdmins} className="bg-purple-900/40 hover:bg-purple-900/60 text-purple-300 border border-purple-500/30 px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1">
+                                    <Icons.Send size={14}/> Отправить ТОП Админам
+                                </button>
+                                <button onClick={() => setShowAiModal(false)}><Icons.X size={20} className="text-gray-500 hover:text-white"/></button>
+                            </div>
+                        </div>
+                        
+                        <div className="flex gap-2 mb-4 bg-gray-900 p-1 rounded-lg">
+                            <button onClick={() => setAiModalTab('history')} className={`flex-1 py-1.5 rounded text-sm font-bold transition-colors ${aiModalTab === 'history' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}>История</button>
+                            <button onClick={() => setAiModalTab('top')} className={`flex-1 py-1.5 rounded text-sm font-bold transition-colors ${aiModalTab === 'top' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}>ТОП Вопросов</button>
+                        </div>
+
+                        {aiModalTab === 'history' && (
+                            <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar">
+                                {(aiStats.history || []).filter(h => !h.cleared).slice(0, 100).map((h, i) => (
+                                    <div key={i} className="bg-gray-900 p-4 rounded-lg border border-gray-800">
+                                        <div className="flex justify-between text-xs text-gray-500 mb-2"><span>#{i+1}</span><span>{new Date(h.time).toLocaleString('ru-RU')}</span></div>
+                                        <div className="text-white text-sm font-bold mb-1">Q: {h.query}</div>
+                                        <div className="text-gray-400 text-sm pl-2 border-l-2 border-purple-900 whitespace-pre-wrap">A: {h.response}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                         {aiModalTab === 'top' && (
+                            <div className="space-y-2 max-h-[500px] overflow-y-auto custom-scrollbar">
+                                {getTopQuestions().slice(0, 50).map((item, i) => (
+                                    <div key={i} className="bg-gray-900 p-4 rounded-lg border border-gray-800 flex items-center justify-between">
+                                        <div className="text-white text-sm font-bold">{i+1}. {item.query}</div>
+                                        <div className="bg-purple-900/40 text-purple-300 px-3 py-1 rounded text-sm font-bold">{item.count} раз</div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
