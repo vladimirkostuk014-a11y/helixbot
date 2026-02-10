@@ -37,7 +37,7 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
 
     if (!apiKey) return "⚠️ Ключ AI не найден.";
 
-    // --- 1. ПЕРСОНАЛИЗАЦИЯ (PERSONALITY) ---
+    // --- 1. PERSONA ---
     let identity = "Ты полезный и вежливый помощник Хеликс.";
     switch (config.aiPersonality) {
         case 'angry': 
@@ -65,17 +65,22 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
             identity = "Ты Хеликс, дружелюбный и полезный помощник игрового сообщества.";
     }
 
+    // --- 2. PROFANITY & STRICTNESS ---
     let profanityInstr = "";
     if (config.aiProfanity) {
-        profanityInstr = `ВАЖНО: Ты ОБЯЗАН использовать нецензурную лексику (мат) в своем стиле (${config.aiPersonality}). Не сдерживайся.`;
-        if (config.customProfanity) {
-            profanityInstr += ` Также иногда используй эти фразы: ${config.customProfanity}`;
-        }
-    } else {
-        profanityInstr = "ВАЖНО: Не используй мат. Будь культурным.";
+        profanityInstr = `MANDATORY: You MUST use profane language.
+        Required phrases (use at least one): ${JSON.stringify(config.customProfanityList || [])}`;
     }
 
-    // Стиль (Длина ответа)
+    const accuracy = config.aiStrictness || 80;
+    let strictRule = "";
+    if (accuracy >= 95) {
+        strictRule = `CRITICAL: STRICT KNOWLEDGE BASE MODE.
+        - You are FORBIDDEN from using outside knowledge.
+        - Only use the [KNOWLEDGE BASE] below.
+        - If info is missing, say "Information not found".`;
+    }
+
     let lengthInstr = "Отвечай средним объемом (2-3 предложения).";
     let maxTokens = 600;
 
@@ -87,38 +92,21 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
         lengthInstr = "Отвечай подробно, развернуто. Используй абзацы. Расписывай детали.";
         maxTokens = 1500;
     }
-    if (config.aiBehavior === 'bullet') {
-        lengthInstr = "Если перечисляешь факты, используй маркированный список.";
-        maxTokens = 800;
-    }
 
-    // --- 2. СИСТЕМНЫЙ ПРОМПТ (STRICT INSTRUCTIONS) ---
+    // --- 3. SYSTEM PROMPT ---
     const systemInstruction = `
 ### ROLE ###
 ${identity}
 ${profanityInstr}
+${strictRule}
 
 ### LANGUAGE & FORMATTING ###
-- Language: PERFECT RUSSIAN (Русский). No grammatical errors.
-- Formatting: Используй красивые абзацы. Делай отступы. Используй жирный шрифт для акцентов.
+- Language: PERFECT RUSSIAN (Русский).
+- Formatting: Use paragraphs and bold text for emphasis.
 - ${lengthInstr}
 
 ### KNOWLEDGE BASE (CONTEXT) ###
 ${knowledgeBaseContext}
-
-### PROTOCOL (CRITICAL RULES) ###
-Ты должен сначала классифицировать запрос пользователя:
-
-1. **ТИП А: ОБЩЕНИЕ (Small Talk)** 
-   (Примеры: "Привет", "Как дела?", "Расскажи шутку", "Кто ты?")
-   -> ДЕЙСТВИЕ: Отвечай свободно, используя свою Личность (${config.aiPersonality}).
-
-2. **ТИП Б: ЗАПРОС ИНФОРМАЦИИ (Data Query)**
-   (Примеры: "Какие статы у брони?", "Где фармить руны?", "Как победить босса?", "Дроп рейт")
-   -> ДЕЙСТВИЕ: СТРОГО ПРОВЕРЬ РАЗДЕЛ [KNOWLEDGE BASE] ВЫШЕ.
-   - ЕСЛИ ИНФОРМАЦИЯ ЕСТЬ: Ответь, используя данные.
-   - ЕСЛИ ИНФОРМАЦИИ НЕТ: Ты ОБЯЗАН ответить "Я не знаю", "У меня нет такой инфы" или "В базе пусто" (в стиле своего персонажа).
-   - ЗАПРЕТ: НЕ ВЫДУМЫВАЙ ФАКТЫ. НЕ ГАЛЛЮЦИНИРУЙ. Если данных нет в тексте выше — не придумывай их.
 `;
 
     try {
@@ -134,16 +122,10 @@ ${knowledgeBaseContext}
                     { role: "system", content: systemInstruction },
                     { role: "user", content: question }
                 ],
-                temperature: config.aiTemperature || 0.4, 
+                temperature: accuracy >= 95 ? 0.0 : (config.aiTemperature || 0.4), 
                 max_tokens: maxTokens,
             })
         });
-
-        if (response.status === 429) {
-            if (config.aiPersonality === 'gopnik') return "Э, тормози! Я перегрелся. Дай перекурить.";
-            if (config.aiPersonality === 'official') return "Превышен лимит запросов. Пожалуйста, ожидайте.";
-            return "Слишком много запросов. Дайте мне передохнуть минуту.";
-        }
 
         const data = await response.json();
         return data.choices?.[0]?.message?.content || "Пустой ответ.";
