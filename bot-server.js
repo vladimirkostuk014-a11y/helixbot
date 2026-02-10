@@ -35,8 +35,9 @@ let state = {
 let lastUpdateId = 0;
 const processedUpdates = new Set();
 const sentCalendarNotifications = new Set();
+let dailyTopSent = false;
 
-console.log("🔥 [SERVER] Запуск сервера Helix (v9.8 Final)...");
+console.log("🔥 [SERVER] Запуск сервера Helix (v9.9 Final)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -94,8 +95,6 @@ const sendMessage = async (chatId, text, options = {}) => {
 };
 
 const sendPhoto = async (chatId, photoUrl, caption, options = {}) => {
-    // If photoUrl is base64, this might fail unless using formData, but for simplicity assuming URL here or already uploaded.
-    // If it's a URL or File ID:
     return await apiCall('sendPhoto', { chat_id: chatId, photo: photoUrl, caption, parse_mode: 'HTML', ...options });
 };
 
@@ -118,22 +117,32 @@ const runCronJobs = async () => {
     const timeString = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const dateString = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     
-    // Daily Cleanup
+    // Daily Cleanup & Daily Top at Midnight
     if (timeString === '00:00') {
-        try {
-            await set(ref(db, 'topicHistory'), {});
-            await set(ref(db, 'topicUnreads'), {});
-            // Reset daily counters
-            const usersRef = ref(db, 'users');
-            const snapshot = await get(usersRef);
-            const users = snapshot.val();
-            if (users) {
-                const updates = {};
-                Object.keys(users).forEach(uid => { updates[`${uid}/dailyMsgCount`] = 0; });
-                await firebaseUpdate(usersRef, updates);
+        if (!dailyTopSent) {
+            // Check if _daily_top_ command exists and send it automatically
+            const dailyTopCmd = state.commands.find(c => c.trigger === '_daily_top_');
+            if (dailyTopCmd && state.config.targetChatId) {
+                await handleDailyTop(state.config.targetChatId, undefined);
             }
-        } catch (e) { console.error("Cleanup error:", e); }
-        await new Promise(r => setTimeout(r, 60000));
+            dailyTopSent = true;
+
+            try {
+                await set(ref(db, 'topicHistory'), {});
+                await set(ref(db, 'topicUnreads'), {});
+                
+                const usersRef = ref(db, 'users');
+                const snapshot = await get(usersRef);
+                const users = snapshot.val();
+                if (users) {
+                    const updates = {};
+                    Object.keys(users).forEach(uid => { updates[`${uid}/dailyMsgCount`] = 0; });
+                    await firebaseUpdate(usersRef, updates);
+                }
+            } catch (e) { console.error("Cleanup error:", e); }
+        }
+    } else {
+        dailyTopSent = false;
     }
 
     if (state.calendarEvents && state.config.targetChatId && state.config.enableCalendarAlerts) {
@@ -179,8 +188,8 @@ const updateUserHistory = async (user, message, isLeaving = false) => {
             status: isLeaving ? 'left' : (existingUser.status || 'active'), 
             warnings: existingUser.warnings || 0,
             history: Array.isArray(existingUser.history) ? existingUser.history : [],
-            msgCount: (existingUser.msgCount || 0) + (isLeaving ? 0 : 1),
-            dailyMsgCount: (existingUser.dailyMsgCount || 0) + (isLeaving ? 0 : 1),
+            msgCount: (existingUser.msgCount || 0) + (isLeaving ? 0 : (message ? 1 : 0)),
+            dailyMsgCount: (existingUser.dailyMsgCount || 0) + (isLeaving ? 0 : (message ? 1 : 0)),
             lastSeen: new Date().toLocaleTimeString('ru-RU')
         };
         
@@ -188,8 +197,11 @@ const updateUserHistory = async (user, message, isLeaving = false) => {
         if (message) {
              const newHistory = [...currentUser.history, message].slice(-50); 
              currentUser.history = newHistory;
-             if (message.dir === 'in') currentUser.unreadCount = (existingUser.unreadCount || 0) + 1;
-             else currentUser.unreadCount = 0;
+             
+             // Unread count ONLY increases if message is private (isGroup === false) and incoming
+             if (message.dir === 'in' && !message.isGroup) {
+                 currentUser.unreadCount = (existingUser.unreadCount || 0) + 1;
+             }
         }
 
         await set(ref(db, userPath), currentUser);
@@ -247,8 +259,6 @@ const getAIResponse = async (question, userName) => {
     }
 
     // --- Accuracy/Strictness Logic ---
-    // High strictness (80-100) -> Low Temp (0.1), Strict Prompt
-    // Low strictness (0-30) -> High Temp (0.7), Creative Prompt
     const accuracy = aiStrictness || 80;
     const temp = Math.max(0.1, Math.min(0.9, 1 - (accuracy / 100)));
     
@@ -385,7 +395,9 @@ const processUpdate = async (tgUpdate) => {
                 // Check for _welcome_ command
                 const welcomeCmd = state.commands.find(c => c.trigger === '_welcome_');
                 if (welcomeCmd) {
-                    const text = welcomeCmd.response.replace(/{user}/g, member.first_name);
+                    // Correct replacement for mention
+                    const nameLink = `<a href="tg://user?id=${member.id}">${member.first_name}</a>`;
+                    const text = welcomeCmd.response.replace(/{user}/g, nameLink).replace(/{name}/g, member.first_name);
                     const markup = welcomeCmd.buttons && welcomeCmd.buttons.length > 0 
                         ? { inline_keyboard: welcomeCmd.buttons.map(b => [{ text: b.text, url: b.url }]) } 
                         : undefined;
@@ -438,7 +450,10 @@ const processUpdate = async (tgUpdate) => {
                     return;
                 }
 
-                let responseText = cmd.response.replace(/{user}/g, user.first_name);
+                // Proper link for name
+                const nameLink = `<a href="tg://user?id=${user.id}">${user.first_name}</a>`;
+                let responseText = cmd.response.replace(/{user}/g, nameLink).replace(/{name}/g, user.first_name);
+                
                 const markup = cmd.buttons?.length > 0 ? { inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
                 const opts = { message_thread_id: threadId !== 'general' ? threadId : undefined, reply_markup: markup };
 

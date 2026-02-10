@@ -46,7 +46,7 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
              setUsers(prev => ({ ...prev, [selectedUser.id]: { ...prev[selectedUser.id], unreadCount: 0 } }));
              saveData(`users/${selectedUser.id}/unreadCount`, 0);
         }
-    }, [selectedUserId]);
+    }, [selectedUserId, users]); // Added users dependency to update view when warn changes
 
     useEffect(() => {
         if (selectedUser && chatEndRef.current) {
@@ -81,6 +81,22 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
             setUsers(prev => ({ ...prev, [selectedUserId]: { ...prev[selectedUserId], history: [] } }));
             saveData(`users/${selectedUserId}/history`, []);
             if (addLog) addLog('CRM', `Очищена история с ${selectedUser?.name}`, 'info');
+        }
+    };
+
+    const handleKickUser = async () => {
+        if (!selectedUserId || !selectedUser) return;
+        if (window.confirm(`Вы точно хотите кикнуть ${selectedUser.name} из группы?`)) {
+            try {
+                await apiCall('banChatMember', { chat_id: config.targetChatId, user_id: selectedUserId }, config);
+                await apiCall('unbanChatMember', { chat_id: config.targetChatId, user_id: selectedUserId }, config); // Unban to allow rejoin
+                
+                setUsers(prev => ({ ...prev, [selectedUserId]: { ...prev[selectedUserId], status: 'left' } }));
+                saveData(`users/${selectedUserId}/status`, 'left');
+                if (addLog) addLog('Kick', `Пользователь ${selectedUser.name} кикнут`, 'warning');
+            } catch (e) {
+                alert('Ошибка при кике: ' + e);
+            }
         }
     };
 
@@ -189,7 +205,7 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
     return (
         <div className="flex h-full bg-[#0c0c0e] rounded-2xl overflow-hidden border border-gray-800 shadow-2xl">
             {/* List */}
-            <div className={`w-80 flex flex-col border-r border-gray-800 bg-[#121214] ${selectedUser ? 'hidden md:flex' : 'flex w-full'}`}>
+            <div className={`w-full md:w-80 flex flex-col border-r border-gray-800 bg-[#121214] ${selectedUser ? 'hidden md:flex' : 'flex'}`}>
                 <div className="p-4 border-b border-gray-800 flex gap-2">
                     <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Поиск..." className="flex-1 bg-black/40 border border-gray-700 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-blue-500 transition-colors"/>
                     <button onClick={exportToCsv} className="bg-gray-800 hover:bg-gray-700 p-2 rounded-xl text-blue-400 border border-gray-700" title="Экспорт в CSV"><Icons.Upload size={18} className="rotate-180"/></button>
@@ -201,7 +217,10 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
                                 <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0 shadow-lg ${u.role === 'admin' ? 'bg-yellow-500 text-black' : 'bg-gray-700 text-gray-300'}`}>{u.name.charAt(0)}</div>
                                 <div className="min-w-0 flex-1">
                                     <div className="flex justify-between items-center">
-                                        <div className="font-bold text-gray-200 truncate text-sm">{u.name}</div>
+                                        <div className="font-bold text-gray-200 truncate text-sm flex items-center gap-1">
+                                            {u.name}
+                                            {u.status === 'left' && <span className="text-[10px] bg-red-900/50 text-red-400 px-1 rounded">LEFT</span>}
+                                        </div>
                                         {u.status === 'banned' && <Icons.Slash size={14} className="text-red-500"/>}
                                         {u.status === 'muted' && <Icons.Mic size={14} className="text-yellow-500"/>}
                                     </div>
@@ -217,28 +236,31 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
             {/* Main View */}
             {selectedUser ? (
                 <div className="flex-1 flex flex-col relative bg-[#09090b]">
-                    <div className="h-16 border-b border-gray-800 flex items-center justify-between px-6 bg-[#121214]">
+                    <div className="h-16 border-b border-gray-800 flex items-center justify-between px-4 md:px-6 bg-[#121214]">
                         <div className="flex items-center gap-4">
-                            <button className="md:hidden text-gray-400" onClick={() => setSelectedUserId(null)}><Icons.ChevronRight className="rotate-180"/></button>
+                            <button className="md:hidden text-gray-400" onClick={() => setSelectedUserId(null)}><Icons.ChevronDown className="rotate-90" size={24}/></button>
                             <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg ${selectedUser.role === 'admin' ? 'bg-yellow-500 text-black' : 'bg-gray-700 text-white'}`}>{selectedUser.name.charAt(0)}</div>
                             <div>
-                                <div className="font-bold text-white text-sm">{selectedUser.name} <span className="text-xs font-normal text-gray-500 ml-2">ID: {selectedUser.id}</span></div>
+                                <div className="font-bold text-white text-sm">{selectedUser.name} <span className="text-xs font-normal text-gray-500 ml-2 hidden md:inline">ID: {selectedUser.id}</span></div>
                                 <div className="text-xs text-gray-400 flex items-center gap-2">@{selectedUser.username || 'no_user'} <span className={`px-1.5 rounded text-[10px] uppercase font-bold ${selectedUser.role === 'admin' ? 'bg-yellow-900/40 text-yellow-500' : 'bg-gray-800 text-gray-500'}`}>{selectedUser.role}</span></div>
                             </div>
                         </div>
-                        <button onClick={handleClearHistory} className="text-gray-500 hover:text-red-500 p-2 rounded-lg transition-colors border border-gray-700/50 hover:bg-gray-800"><Icons.Trash2 size={18}/></button>
+                        <div className="flex gap-2">
+                            <button onClick={handleKickUser} className="text-gray-500 hover:text-red-500 p-2 rounded-lg transition-colors border border-gray-700/50 hover:bg-gray-800" title="Кикнуть"><Icons.X size={18}/></button>
+                            <button onClick={handleClearHistory} className="text-gray-500 hover:text-red-500 p-2 rounded-lg transition-colors border border-gray-700/50 hover:bg-gray-800" title="Очистить историю"><Icons.Trash2 size={18}/></button>
+                        </div>
                     </div>
 
-                    <div className="flex flex-1 overflow-hidden">
-                        <div className="flex-1 flex flex-col min-w-0 bg-black/20 relative">
+                    <div className="flex flex-1 overflow-hidden flex-col md:flex-row">
+                        <div className="flex-1 flex flex-col min-w-0 bg-black/20 relative h-full">
                              <div className="absolute inset-0 opacity-5 pointer-events-none" style={{backgroundImage: 'radial-gradient(circle at 1px 1px, #333 1px, transparent 0)', backgroundSize: '20px 20px'}}></div>
-                            <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar flex flex-col-reverse relative z-10">
+                            <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 custom-scrollbar flex flex-col-reverse relative z-10">
                                 <div ref={chatEndRef}/>
                                 {[...(selectedUser.history || []).filter(m => !m.isGroup)].reverse().map((msg, i) => {
                                     const isOut = msg.dir === 'out';
                                     return (
                                         <div key={i} className={`flex w-full ${isOut ? 'justify-end' : 'justify-start'}`}>
-                                            <div className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm shadow-md transition-all ${isOut ? 'bg-blue-600 text-white rounded-br-sm' : 'bg-gray-800 text-gray-200 rounded-bl-sm border border-gray-700'}`}>
+                                            <div className={`max-w-[85%] md:max-w-[75%] px-4 py-2.5 rounded-2xl text-sm shadow-md transition-all ${isOut ? 'bg-blue-600 text-white rounded-br-sm' : 'bg-gray-800 text-gray-200 rounded-bl-sm border border-gray-700'}`}>
                                                 {msg.mediaUrl && <img src={msg.mediaUrl} className="max-w-full rounded-lg mb-2 mt-1 max-h-40 object-cover"/>}
                                                 {msg.text && <div className="whitespace-pre-wrap leading-relaxed">{msg.text}</div>}
                                                 {msg.buttons && msg.buttons.length > 0 && <div className="mt-2 pt-2 border-t border-white/20 flex flex-wrap gap-2">{msg.buttons.map((b, bi) => <span key={bi} className="bg-black/20 px-2 py-1 rounded text-xs">{b.text}</span>)}</div>}
@@ -275,13 +297,13 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
                                 )}
                                 <div className="flex gap-2">
                                     <button onClick={() => setShowTools(!showTools)} className={`p-3 rounded-xl transition-colors ${showTools ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}><Icons.Plus size={20}/></button>
-                                    <textarea value={msgText} onChange={e => setMsgText(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSendPrivate())} placeholder="Личное сообщение..." className="flex-1 bg-black border border-gray-700 rounded-xl px-4 py-3 text-white text-sm outline-none focus:border-blue-500 resize-none h-12"/>
+                                    <textarea value={msgText} onChange={e => setMsgText(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSendPrivate())} placeholder="Личное сообщение..." className="flex-1 bg-black border border-gray-700 rounded-xl px-4 py-3 text-white text-sm outline-none focus:border-blue-500 resize-none h-12 custom-scrollbar"/>
                                     <button onClick={handleSendPrivate} disabled={isSending} className="bg-blue-600 hover:bg-blue-500 text-white w-12 rounded-xl flex items-center justify-center transition-colors shadow-lg shadow-blue-900/20"><Icons.Send size={20}/></button>
                                 </div>
                             </div>
                         </div>
 
-                        <div className="w-72 bg-[#121214] border-l border-gray-800 p-6 overflow-y-auto custom-scrollbar">
+                        <div className="w-full md:w-72 bg-[#121214] border-t md:border-t-0 md:border-l border-gray-800 p-6 overflow-y-auto custom-scrollbar">
                             {selectedUser.role !== 'admin' && (
                                 <>
                                     <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4">Наказания</h3>
@@ -308,7 +330,7 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, commands = [
                     </div>
                 </div>
             ) : (
-                <div className="flex-1 flex flex-col items-center justify-center text-gray-600 bg-[#0f0f12]">
+                <div className="flex-1 flex flex-col items-center justify-center text-gray-600 bg-[#0f0f12] hidden md:flex">
                     <div className="w-24 h-24 bg-gray-900 rounded-full flex items-center justify-center mb-4 shadow-inner"><Icons.Users size={48} className="opacity-20"/></div>
                     <p className="font-medium">Выберите пользователя из списка</p>
                 </div>

@@ -431,12 +431,12 @@ const App = () => {
                             {isBotActive ? <><Icons.Pause size={14}/> Поставить на Паузу</> : <><Icons.Play size={14}/> Активировать Бота</>}
                         </span>
                     </button>
-                    <div className="mt-2 text-center">
+                    <div className="mt-4">
                         <button 
                             onClick={() => { localStorage.removeItem('helix_auth_token'); setIsAuthenticated(false); }}
-                            className="text-[10px] text-gray-500 hover:text-white underline"
+                            className="w-full bg-red-900/20 text-red-500 border border-red-900/30 rounded-xl py-2 text-xs font-bold hover:bg-red-900/30 transition-colors flex items-center justify-center gap-2"
                         >
-                            Выйти из системы
+                            <Icons.X size={14}/> Выйти из системы
                         </button>
                     </div>
                 </div>

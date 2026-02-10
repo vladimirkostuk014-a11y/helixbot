@@ -5,6 +5,9 @@ import { User, AiStats, BotConfig, Group, LogEntry } from '../types';
 import { Icons } from './Icons';
 import { apiCall, getAIResponse } from '../services/api';
 
+// Encrypted Settings Password: 8952 -> ODk1Mg==
+const SETTINGS_HASH = "ODk1Mg==";
+
 interface DashboardProps {
     users: Record<string, User>;
     groups?: Record<string, Group>;
@@ -30,6 +33,11 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     const [showAiModal, setShowAiModal] = useState(false);
     const [aiModalTab, setAiModalTab] = useState<'history' | 'top'>('history');
     
+    // Settings Auth
+    const [isSettingsUnlocked, setIsSettingsUnlocked] = useState(false);
+    const [settingsPass, setSettingsPass] = useState('');
+    const [settingsError, setSettingsError] = useState(false);
+
     // Profanity List State
     const [newProfanityWord, setNewProfanityWord] = useState('');
     
@@ -48,6 +56,18 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
             playgroundEndRef.current.scrollIntoView({ behavior: 'smooth' });
         }
     }, [playgroundHistory, showPlayground, isPlaygroundThinking]);
+
+    const handleSettingsLogin = (e: React.FormEvent) => {
+        e.preventDefault();
+        try {
+            if (btoa(settingsPass) === SETTINGS_HASH) {
+                setIsSettingsUnlocked(true);
+                setSettingsError(false);
+            } else {
+                setSettingsError(true);
+            }
+        } catch { setSettingsError(true); }
+    };
 
     const getTopQuestions = () => {
         const counts: Record<string, number> = {};
@@ -112,7 +132,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         if (newProfanityWord.trim()) {
             const currentList = config.customProfanityList || [];
             if (!currentList.includes(newProfanityWord.trim())) {
-                setConfig({ ...config, customProfanityList: [...currentList, newProfanityWord.trim()] });
+                const newList = [...currentList, newProfanityWord.trim()];
+                setConfig({ ...config, customProfanityList: newList });
             }
             setNewProfanityWord('');
         }
@@ -120,7 +141,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
 
     const handleRemoveProfanity = (word: string) => {
         const currentList = config.customProfanityList || [];
-        setConfig({ ...config, customProfanityList: currentList.filter(w => w !== word) });
+        const newList = currentList.filter(w => w !== word);
+        setConfig({ ...config, customProfanityList: newList });
     };
 
     const getActivityData = () => {
@@ -178,6 +200,33 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     );
 
     if (viewMode === 'settings') {
+        if (!isSettingsUnlocked) {
+            return (
+                <div className="flex items-center justify-center h-[calc(100vh-200px)]">
+                    <div className="bg-[#121214] border border-gray-800 rounded-2xl p-8 w-full max-w-sm text-center shadow-2xl">
+                        <div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-4 text-purple-500">
+                            <Icons.Settings size={32}/>
+                        </div>
+                        <h2 className="text-xl font-bold text-white mb-2">Настройки Хеликса</h2>
+                        <p className="text-gray-500 text-sm mb-6">Введите PIN-код для доступа</p>
+                        <form onSubmit={handleSettingsLogin} className="space-y-4">
+                            <input 
+                                type="password" 
+                                value={settingsPass} 
+                                onChange={e => setSettingsPass(e.target.value)} 
+                                className={`w-full bg-black border ${settingsError ? 'border-red-500' : 'border-gray-700'} rounded-xl px-4 py-3 text-white text-center tracking-[0.5em] text-lg outline-none focus:border-purple-500`}
+                                placeholder="••••"
+                                autoFocus
+                                maxLength={4}
+                            />
+                            {settingsError && <div className="text-red-500 text-xs font-bold">Неверный PIN</div>}
+                            <button className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 rounded-xl transition-colors">Открыть</button>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
         return (
              <div className="space-y-6">
                  {/* AI Settings Block */}
@@ -327,7 +376,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
 
     return (
         <div className="space-y-8 relative">
-            {/* ... (Existing Cards and Charts) ... */}
             {/* KPI Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 <KpiCard 
