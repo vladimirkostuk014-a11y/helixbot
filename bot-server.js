@@ -37,7 +37,7 @@ const processedUpdates = new Set();
 const sentCalendarNotifications = new Set();
 let dailyTopSent = false;
 
-console.log("🔥 [SERVER] Запуск сервера Helix (Fixed v10.0)...");
+console.log("🔥 [SERVER] Запуск сервера Helix (v9.9 Final)...");
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ С FIREBASE
@@ -117,16 +117,20 @@ const runCronJobs = async () => {
     const timeString = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const dateString = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     
+    // Daily Cleanup & Daily Top at Midnight
     if (timeString === '00:00') {
         if (!dailyTopSent) {
+            // Check if _daily_top_ command exists and send it automatically
             const dailyTopCmd = state.commands.find(c => c.trigger === '_daily_top_');
             if (dailyTopCmd && state.config.targetChatId) {
                 await handleDailyTop(state.config.targetChatId, undefined);
             }
             dailyTopSent = true;
+
             try {
                 await set(ref(db, 'topicHistory'), {});
                 await set(ref(db, 'topicUnreads'), {});
+                
                 const usersRef = ref(db, 'users');
                 const snapshot = await get(usersRef);
                 const users = snapshot.val();
@@ -167,7 +171,7 @@ setInterval(runCronJobs, 30000);
 // ==========================================
 // 5. CRM & HISTORY
 // ==========================================
-const updateUserHistory = async (user, message) => {
+const updateUserHistory = async (user, message, isLeaving = false) => {
     try {
         const userId = user.id;
         if (userId < 0) return;
@@ -181,21 +185,25 @@ const updateUserHistory = async (user, message) => {
             name: user.first_name || 'Unknown',
             username: user.username || '', 
             role: state.config.adminIds?.includes(String(userId)) ? 'admin' : (existingUser.role || 'user'),
-            status: existingUser.status || 'active', 
+            status: isLeaving ? 'left' : (existingUser.status || 'active'), 
             warnings: existingUser.warnings || 0,
             history: Array.isArray(existingUser.history) ? existingUser.history : [],
-            msgCount: (existingUser.msgCount || 0) + (message ? 1 : 0),
-            dailyMsgCount: (existingUser.dailyMsgCount || 0) + (message ? 1 : 0),
+            msgCount: (existingUser.msgCount || 0) + (isLeaving ? 0 : (message ? 1 : 0)),
+            dailyMsgCount: (existingUser.dailyMsgCount || 0) + (isLeaving ? 0 : (message ? 1 : 0)),
             lastSeen: new Date().toLocaleTimeString('ru-RU')
         };
         
+        // Add new message to history only if not just updating status
         if (message) {
              const newHistory = [...currentUser.history, message].slice(-50); 
              currentUser.history = newHistory;
+             
+             // Unread count ONLY increases if message is private (isGroup === false) and incoming
              if (message.dir === 'in' && !message.isGroup) {
                  currentUser.unreadCount = (existingUser.unreadCount || 0) + 1;
              }
         }
+
         await set(ref(db, userPath), currentUser);
     } catch (e) { console.error("CRM Update Error:", e); }
 };
@@ -204,11 +212,13 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
     try {
         const tId = topicId || 'general';
         const path = `topicHistory/${tId}`;
+        
         const currentName = state.topicNames[tId];
         const newName = topicNameRaw || (currentName ? currentName : `Topic ${tId}`);
         if (tId !== 'general' && (!currentName || (topicNameRaw && currentName !== topicNameRaw))) {
             await firebaseUpdate(ref(db, 'topicNames'), { [tId]: newName });
         }
+
         const snapshot = await get(ref(db, path));
         const currentHistory = snapshot.val() || [];
         const updatedHistory = [...(Array.isArray(currentHistory) ? currentHistory : []), message].slice(-50);
@@ -223,16 +233,14 @@ const updateTopicHistory = async (topicId, message, topicNameRaw) => {
 };
 
 // ==========================================
-// 6. AI LOGIC (STRICT 100% FIX)
+// 6. AI (UPDATED)
 // ==========================================
 const getAIResponse = async (question, userName) => {
-    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiBehavior, aiStrictness, customProfanityList } = state.config;
+    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiBehavior, aiTemperature, aiStrictness, customProfanityList } = state.config;
     if (!openaiApiKey) return "⚠️ Ключ AI не настроен.";
 
-    // 1. Context - Explicitly formatted
-    const context = state.knowledgeBase.map(k => `[СТАТЬЯ] Тема: ${k.title}\nТекст: ${k.response}`).join('\n\n');
+    const context = state.knowledgeBase.map(k => `[INFO] Q: ${k.title} -> A: ${k.response}`).join('\n');
     
-    // 2. Persona
     let identity = "Ты полезный помощник Хеликс.";
     switch (aiPersonality) {
         case 'angry': identity = "Ты злой, токсичный бот. Грубишь всем."; break;
@@ -243,46 +251,37 @@ const getAIResponse = async (question, userName) => {
         case 'official': identity = "Ты сухой бюрократ. Формальный стиль."; break;
     }
 
-    // 3. Profanity Logic (FORCED)
-    let profanityBlock = "";
+    // --- Custom Profanity Injection ---
+    let randomPhrase = "";
     if (aiProfanity && customProfanityList && customProfanityList.length > 0) {
-        const words = customProfanityList.join(", ");
-        profanityBlock = `
-        ВАЖНО: Ты находишься в режиме "Мат". 
-        Ты ОБЯЗАН использовать в своем ответе слова или фразы из этого списка: [${words}]. 
-        Вставляй их органично, в стиле своего персонажа.`;
+        const randIndex = Math.floor(Math.random() * customProfanityList.length);
+        randomPhrase = `Вставь в ответ эту фразу (или её вариацию): "${customProfanityList[randIndex]}".`;
     }
 
-    // 4. Strictness Logic (100% = Temperature 0 + Strict Prompt)
+    // --- Accuracy/Strictness Logic ---
     const accuracy = aiStrictness || 80;
-    // If 100%, temperature is 0 (deterministic). Otherwise scaled.
-    const temp = accuracy >= 100 ? 0 : Math.max(0.1, 1 - (accuracy / 100));
+    const temp = Math.max(0.1, Math.min(0.9, 1 - (accuracy / 100)));
     
     let strictPrompt = "";
-    if (accuracy >= 99) {
-        strictPrompt = `
-        РЕЖИМ 100% ТОЧНОСТИ:
-        - Твой единственный источник информации — раздел "БАЗА ЗНАНИЙ" ниже.
-        - ТЕБЕ ЗАПРЕЩЕНО использовать свои встроенные знания или придумывать факты.
-        - Если ответа нет в "БАЗЕ ЗНАНИЙ", ответь: "В моей базе знаний нет информации об этом" (в стиле своего персонажа).
-        - Игнорируй всё, чего нет в тексте ниже.
-        `;
-    } else if (accuracy >= 80) {
-        strictPrompt = "Приоритет — БАЗА ЗНАНИЙ. Используй её факты. Если чего-то нет, можешь аккуратно дополнить, но не выдумывай.";
+    if (accuracy >= 80) {
+        strictPrompt = "STRICTLY use the KNOWLEDGE BASE. If the answer is not there, say 'I don't know'. DO NOT INVENT FACTS.";
+    } else if (accuracy >= 50) {
+        strictPrompt = "Use the KNOWLEDGE BASE primarily. If info is missing, you can make reasonable assumptions based on game lore.";
+    } else {
+        strictPrompt = "Be creative. You can invent details if needed to make the answer fun.";
     }
 
     const systemPrompt = `
-    РОЛЬ: ${identity}
+    ROLE: ${identity}
+    ${randomPhrase}
     
-    ${profanityBlock}
+    INSTRUCTIONS:
+    1. Language: PERFECT RUSSIAN.
+    2. ${strictPrompt}
+    3. Length: ${aiBehavior === 'concise' ? 'Short (1 sentence)' : aiBehavior === 'detailed' ? 'Detailed (paragraphs)' : 'Normal (2-3 sentences)'}.
     
-    ИНСТРУКЦИИ:
-    1. Язык: Русский.
-    2. Длина: ${aiBehavior === 'concise' ? '1 предложение' : '2-3 предложения'}.
-    ${strictPrompt}
-    
-    БАЗА ЗНАНИЙ:
-    ${context.length > 0 ? context : "База знаний пуста."}
+    KNOWLEDGE BASE:
+    ${context}
     `;
 
     try {
@@ -290,20 +289,20 @@ const getAIResponse = async (question, userName) => {
             method: "POST",
             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${openaiApiKey}` },
             body: JSON.stringify({
-                model: aiModel || "llama-3.3-70b-versatile", // MODELS KEPT AS REQUESTED
+                model: aiModel || "llama-3.3-70b-versatile",
                 messages: [{ role: "system", content: systemPrompt }, { role: "user", content: question }],
                 temperature: temp, 
-                max_tokens: state.config.aiMaxTokens || 800
+                max_tokens: state.config.aiMaxTokens || 600
             })
         });
         
         const data = await response.json();
-        return data.choices?.[0]?.message?.content || "Ошибка ядра AI.";
+        return data.choices?.[0]?.message?.content || "Ошибка AI.";
     } catch (e) { return "Ошибка сети AI."; }
 };
 
 // ==========================================
-// 7. СИСТЕМНЫЕ КОМАНДЫ (WARN FIX)
+// 7. СИСТЕМНЫЕ КОМАНДЫ (SYNCED)
 // ==========================================
 const handleSystemCommand = async (command, msg, threadId) => {
     const chatId = msg.chat.id;
@@ -314,26 +313,35 @@ const handleSystemCommand = async (command, msg, threadId) => {
         if (targetUser.is_bot) return;
 
         if (command === '/warn') {
-            const userRef = ref(db, `users/${targetUser.id}`);
-            const snapshot = await get(userRef);
-            const val = snapshot.val() || { warnings: 0 };
+            const userPath = `users/${targetUser.id}`;
+            // FORCE FETCH FROM DB TO ENSURE SYNC
+            const userSnap = await get(ref(db, userPath));
+            const userData = userSnap.val() || {};
+            const newWarns = (userData.warnings || 0) + 1;
             
-            const newWarns = (val.warnings || 0) + 1;
-            
-            // DIRECT WRITE TO DB
-            await firebaseUpdate(userRef, { 
-                warnings: newWarns,
-                name: targetUser.first_name,
-                username: targetUser.username || ''
+            await firebaseUpdate(ref(db, userPath), { 
+                warnings: newWarns, 
+                name: targetUser.first_name, 
+                username: targetUser.username || '' 
             });
             
             if (newWarns >= 3) {
                 await restrictUser(chatId, targetUser.id, { can_send_messages: false }, Math.floor(Date.now()/1000) + 172800);
-                await firebaseUpdate(userRef, { warnings: 0, status: 'muted' });
+                await firebaseUpdate(ref(db, userPath), { warnings: 0, status: 'muted' });
                 return sendMessage(chatId, `🛑 <b>${targetUser.first_name}</b> получил 3/3 варнов и заглушен на 48 часов.`, { message_thread_id: threadId });
             } else {
                 return sendMessage(chatId, `⚠️ <b>${targetUser.first_name}</b>, предупреждение (${newWarns}/3).`, { message_thread_id: threadId });
             }
+        }
+        
+        if (command === '/unwarn') {
+            const userPath = `users/${targetUser.id}`;
+            const userSnap = await get(ref(db, userPath));
+            const userData = userSnap.val() || {};
+            const newWarns = Math.max(0, (userData.warnings || 0) - 1);
+            
+            await firebaseUpdate(ref(db, userPath), { warnings: newWarns });
+            return sendMessage(chatId, `🕊 <b>${targetUser.first_name}</b>, предупреждение снято. (${newWarns}/3).`, { message_thread_id: threadId });
         }
     }
 };
@@ -343,11 +351,17 @@ const handleDailyTop = async (chatId, threadId) => {
         const snapshot = await get(ref(db, 'users'));
         const users = snapshot.val();
         if (!users) return;
+        
         const sorted = Object.values(users)
             .filter(u => u.dailyMsgCount > 0 && u.id > 0)
             .sort((a, b) => b.dailyMsgCount - a.dailyMsgCount)
             .slice(0, 10);
-        if (sorted.length === 0) return;
+            
+        if (sorted.length === 0) {
+            await sendMessage(chatId, "📉 Сегодня активности еще не было.", { message_thread_id: threadId });
+            return;
+        }
+        
         let msg = "🏆 <b>Топ 10 активистов за день:</b>\n\n";
         sorted.forEach((u, i) => {
             let medal = '▫️';
@@ -356,12 +370,13 @@ const handleDailyTop = async (chatId, threadId) => {
             if (i===2) medal = '🥉';
             msg += `${medal} <b>${u.name}</b>: ${u.dailyMsgCount} сбщ.\n`;
         });
+        
         await sendMessage(chatId, msg, { message_thread_id: threadId });
     } catch (e) { console.error(e); }
 };
 
 // ==========================================
-// 8. PROCESS UPDATE (WELCOME FIX)
+// 8. PROCESS UPDATE
 // ==========================================
 const processUpdate = async (tgUpdate) => {
     const msg = tgUpdate.message;
@@ -370,58 +385,41 @@ const processUpdate = async (tgUpdate) => {
     const chatId = String(msg.chat.id);
     const targetChatId = String(state.config.targetChatId);
     
-    // JOIN LOGIC
+    // --- 1. MEMBER JOIN / LEAVE LOGIC ---
     if (msg.new_chat_members) {
         for (const member of msg.new_chat_members) {
             if (!member.is_bot) {
-                // 1. ADD USER TO CRM INSTANTLY
-                await firebaseUpdate(ref(db, `users/${member.id}`), {
-                    id: member.id,
-                    name: member.first_name,
-                    username: member.username || '',
-                    status: 'active',
-                    role: 'user',
-                    joinDate: new Date().toLocaleDateString('ru-RU'),
-                    lastSeen: new Date().toLocaleTimeString('ru-RU'),
-                    msgCount: 0,
-                    dailyMsgCount: 0,
-                    warnings: 0,
-                    history: []
-                });
+                // Add to DB immediately
+                await updateUserHistory(member, null);
                 
-                // 2. WELCOME COMMAND
+                // Check for _welcome_ command
                 const welcomeCmd = state.commands.find(c => c.trigger === '_welcome_');
                 if (welcomeCmd) {
+                    // Correct replacement for mention
                     const nameLink = `<a href="tg://user?id=${member.id}">${member.first_name}</a>`;
                     const text = welcomeCmd.response.replace(/{user}/g, nameLink).replace(/{name}/g, member.first_name);
-                    
-                    const markup = welcomeCmd.buttons?.length > 0 ? { 
-                        inline_keyboard: welcomeCmd.buttons.map(b => [{ text: b.text, url: b.url }]) 
-                    } : undefined;
-                    
-                    // FIXED: Use Notification Topic ID if set, otherwise current thread (which is undefined for join usually, so general)
-                    // If the user set "Where to write report", the welcome goes there.
-                    const targetThread = welcomeCmd.notificationTopicId || undefined;
+                    const markup = welcomeCmd.buttons && welcomeCmd.buttons.length > 0 
+                        ? { inline_keyboard: welcomeCmd.buttons.map(b => [{ text: b.text, url: b.url }]) } 
+                        : undefined;
                     
                     if (welcomeCmd.mediaUrl) {
-                        await sendPhoto(chatId, welcomeCmd.mediaUrl, text, { reply_markup: markup, message_thread_id: targetThread });
+                        await sendPhoto(chatId, welcomeCmd.mediaUrl, text, { reply_markup: markup });
                     } else {
-                        await sendMessage(chatId, text, { reply_markup: markup, message_thread_id: targetThread });
+                        await sendMessage(chatId, text, { reply_markup: markup });
                     }
                 }
             }
         }
     }
     
-    // LEAVE LOGIC - HARD DELETE
     if (msg.left_chat_member) {
         const member = msg.left_chat_member;
         if (!member.is_bot) {
-            // Remove from DB completely so they vanish from site
-            await remove(ref(db, `users/${member.id}`));
+            await updateUserHistory(member, null, true); // true = isLeaving
         }
     }
 
+    // --- 2. MESSAGE PROCESSING ---
     const threadId = msg.message_thread_id ? String(msg.message_thread_id) : 'general';
     const text = (msg.text || msg.caption || '').trim();
     const user = msg.from;
@@ -429,24 +427,14 @@ const processUpdate = async (tgUpdate) => {
     
     if (!isPrivate && chatId !== targetChatId) return;
 
-    // Log message
     if (text || msg.photo) {
-        // We only update if user exists (hasn't left)
-        const userRef = ref(db, `users/${user.id}`);
-        get(userRef).then(snap => {
-            if (snap.exists()) {
-                 const d = snap.val();
-                 firebaseUpdate(userRef, {
-                    name: user.first_name,
-                    lastSeen: new Date().toLocaleTimeString('ru-RU'),
-                    msgCount: (d.msgCount || 0) + 1,
-                    dailyMsgCount: (d.dailyMsgCount || 0) + 1
-                 });
-                 // Add message to history (logic inside updateUserHistory simplified here for speed)
-                 // In a full implementation, you'd append to history array here too
-            }
-        });
-        if (!isPrivate) await updateTopicHistory(threadId, { dir: 'in', text: text || '[Media]', user: user.first_name, time: new Date().toLocaleTimeString('ru-RU') }, null);
+        const logMsg = {
+            dir: 'in', text: text || `[Media]`, type: msg.photo ? 'photo' : 'text',
+            time: new Date().toLocaleTimeString('ru-RU'),
+            isGroup: !isPrivate, user: user.first_name, userId: user.id
+        };
+        await updateUserHistory(user, logMsg);
+        if (!isPrivate) await updateTopicHistory(threadId, { ...logMsg, isIncoming: true }, null);
     }
 
     if (user.is_bot || !state.isBotActive) return;
@@ -454,17 +442,20 @@ const processUpdate = async (tgUpdate) => {
     if (text) {
         const lowerText = text.toLowerCase();
         
+        // --- COMMANDS ---
         for (const cmd of state.commands) {
             if (cmd.matchType === 'exact' && lowerText === cmd.trigger.toLowerCase()) {
                 if (cmd.trigger === '_daily_top_') {
                     await handleDailyTop(chatId, threadId !== 'general' ? threadId : undefined);
                     return;
                 }
+
+                // Proper link for name
                 const nameLink = `<a href="tg://user?id=${user.id}">${user.first_name}</a>`;
                 let responseText = cmd.response.replace(/{user}/g, nameLink).replace(/{name}/g, user.first_name);
+                
                 const markup = cmd.buttons?.length > 0 ? { inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
-                // Priority: Command Config Topic -> Current Thread
-                const opts = { message_thread_id: cmd.notificationTopicId || (threadId !== 'general' ? threadId : undefined), reply_markup: markup };
+                const opts = { message_thread_id: threadId !== 'general' ? threadId : undefined, reply_markup: markup };
 
                 if (cmd.type === 'photo' && cmd.mediaUrl) {
                     await sendPhoto(chatId, cmd.mediaUrl, responseText, opts);
@@ -475,21 +466,42 @@ const processUpdate = async (tgUpdate) => {
             }
         }
 
-        if (lowerText.startsWith('/warn')) {
-            await handleSystemCommand('/warn', msg, threadId !== 'general' ? threadId : undefined);
-            return;
+        if (['/warn', '/unwarn', '/mute', '/ban', '/unmute'].some(c => lowerText.startsWith(c))) {
+            const cmd = lowerText.split(' ')[0];
+            if (state.config.adminIds && state.config.adminIds.includes(String(user.id))) {
+                await handleSystemCommand(cmd, msg, threadId !== 'general' ? threadId : undefined);
+                return;
+            }
         }
 
+        // --- AI TRIGGER CHECK ---
         if (state.config.enableAI) {
             const isMention = lowerText.startsWith('хеликс') || lowerText.startsWith('helix') || (isPrivate && state.config.enablePM);
-            if (isMention && !state.disabledAiTopics.includes(threadId)) {
+            const isDisabled = state.disabledAiTopics.includes(threadId);
+
+            if (isMention && !isDisabled) {
+                // Remove trigger word
                 const question = text.replace(/^(хеликс|helix)/i, '').trim();
-                if (!question) return;
+                if (!question) return; // Ignore just name
+
                 const answer = await getAIResponse(question, user.first_name);
-                await sendMessage(chatId, answer, { reply_to_message_id: msg.message_id, message_thread_id: threadId !== 'general' ? threadId : undefined });
-                // Log stats
-                const curHist = state.aiStats?.history || [];
-                await set(ref(db, 'aiStats'), { total: (state.aiStats?.total || 0) + 1, history: [{query:question, response:answer, time: Date.now()}, ...curHist].slice(0, 100) });
+                
+                await sendMessage(chatId, answer, { 
+                    reply_to_message_id: msg.message_id,
+                    message_thread_id: threadId !== 'general' ? threadId : undefined
+                });
+                
+                // AI Stats & History
+                const curHistRaw = state.aiStats?.history;
+                const curHist = Array.isArray(curHistRaw) ? curHistRaw : [];
+                const newStat = { query: question, response: answer, time: Date.now() };
+
+                await set(ref(db, 'aiStats'), { 
+                    total: (state.aiStats?.total || 0) + 1, 
+                    history: [newStat, ...curHist].slice(0, 100) 
+                });
+                
+                if (!isPrivate) await updateTopicHistory(threadId, { user: 'Bot', text: answer, isIncoming: false, time: new Date().toLocaleTimeString('ru-RU'), type: 'text' }, null);
             }
         }
     }
@@ -510,8 +522,12 @@ const startLoop = async () => {
                     }
                     if (processedUpdates.size > 5000) processedUpdates.clear();
                 }
-            } catch (e) { await new Promise(r => setTimeout(r, 5000)); }
+            } catch (e) { 
+                console.error("Polling Error:", e.message);
+                await new Promise(r => setTimeout(r, 5000)); 
+            }
         } else { await new Promise(r => setTimeout(r, 2000)); }
     }
 };
+
 setTimeout(startLoop, 3000);

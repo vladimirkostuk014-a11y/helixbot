@@ -2,7 +2,6 @@
 import React, { useState } from 'react';
 import { Icons } from './Icons';
 import { KnowledgeItem } from '../types';
-import { saveData } from '../services/firebase';
 
 interface KnowledgeBaseProps {
     items: KnowledgeItem[];
@@ -33,65 +32,30 @@ const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items, categories, setIte
     };
 
     const handleSaveItem = () => {
-        let newItems;
         if (currentItem.id) {
-            newItems = items.map(i => i.id === currentItem.id ? currentItem as KnowledgeItem : i);
+            setItems(items.map(i => i.id === currentItem.id ? currentItem as KnowledgeItem : i));
             if (addLog) addLog('Редактирование БЗ', `Обновлена статья "${currentItem.title}" в разделе ${currentItem.category}`, 'info');
         } else {
-            newItems = [...items, { ...currentItem, id: Math.random().toString(36).substr(2, 9), buttons: [] } as KnowledgeItem];
+            setItems([...items, { ...currentItem, id: Math.random().toString(36).substr(2, 9), buttons: [] } as KnowledgeItem]);
             if (addLog) addLog('Добавление в БЗ', `Создана статья "${currentItem.title}" в разделе ${currentItem.category}`, 'success');
         }
-        setItems(newItems);
-        saveData('knowledgeBase', newItems); // Explicit Save
         setIsEditing(false);
     };
 
     const handleDeleteItem = () => {
         if (!currentItem.id) return;
-        const newItems = items.filter(i => i.id !== currentItem.id);
-        setItems(newItems);
-        saveData('knowledgeBase', newItems); // Explicit Save
+        setItems(items.filter(i => i.id !== currentItem.id));
         if (addLog) addLog('Удаление из БЗ', `Удалена статья "${currentItem.title}"`, 'warning');
         setIsEditing(false);
     };
 
     const handleSaveCat = (oldName: string) => {
         if (tempCatName && tempCatName !== oldName) {
-            const newCats = categories.map(c => c === oldName ? tempCatName : c);
-            const newItems = items.map(kb => kb.category === oldName ? { ...kb, category: tempCatName } : kb);
-            
-            setCategories(newCats);
-            setItems(newItems);
-            
-            saveData('categories', newCats); // Explicit Save
-            saveData('knowledgeBase', newItems); // Explicit Save
-            
+            setCategories(categories.map(c => c === oldName ? tempCatName : c));
+            setItems(items.map(kb => kb.category === oldName ? { ...kb, category: tempCatName } : kb));
             if (addLog) addLog('Переименование раздела', `Раздел "${oldName}" переименован в "${tempCatName}"`, 'info');
         }
         setEditCatName(null);
-    };
-
-    const handleAddCat = () => {
-        if(newCatName && !categories.includes(newCatName)) { 
-            const newCats = [...categories, newCatName];
-            setCategories(newCats);
-            saveData('categories', newCats); // Explicit Save
-            setNewCatName(''); 
-            if (addLog) addLog('Добавление раздела', `Добавлен раздел "${newCatName}"`, 'success'); 
-        }
-    };
-    
-    const handleDeleteCat = (cat: string) => {
-         const newCats = categories.filter(c => c !== cat);
-         const newItems = items.map(kb => kb.category === cat ? { ...kb, category: 'Разное' } : kb);
-         
-         setCategories(newCats);
-         setItems(newItems);
-         
-         saveData('categories', newCats); // Explicit Save
-         saveData('knowledgeBase', newItems); // Explicit Save
-         
-         if(addLog) addLog('Удаление раздела', `Удален раздел "${cat}"`, 'warning');
     };
 
     return (
@@ -136,7 +100,7 @@ const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items, categories, setIte
                     <h3 className="text-lg font-medium mb-4 text-white flex items-center gap-2"><Icons.Folder size={20} className="text-blue-400"/> Управление разделами</h3>
                     <div className="mb-6 flex gap-2">
                         <input value={newCatName} onChange={(e) => setNewCatName(e.target.value)} className="flex-1 bg-gray-900 border border-gray-600 rounded p-2 text-white" placeholder="Название нового раздела..."/>
-                        <button onClick={handleAddCat} className="bg-blue-600 px-4 rounded text-white font-medium hover:bg-blue-500">Добавить</button>
+                        <button onClick={() => { if(newCatName && !categories.includes(newCatName)) { setCategories([...categories, newCatName]); setNewCatName(''); if (addLog) addLog('Добавление раздела', `Добавлен раздел "${newCatName}"`, 'success'); } }} className="bg-blue-600 px-4 rounded text-white font-medium hover:bg-blue-500">Добавить</button>
                     </div>
                     <div className="space-y-2">
                         {categories.map(cat => (
@@ -153,7 +117,7 @@ const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items, categories, setIte
                                 {editCatName !== cat && (
                                     <div className="flex gap-2">
                                         <button onClick={() => { setEditCatName(cat); setTempCatName(cat); }} className="text-gray-400 hover:text-white p-1"><Icons.Edit2 size={16}/></button>
-                                        <button onClick={() => handleDeleteCat(cat)} className="text-gray-400 hover:text-red-400 p-1"><Icons.Trash2 size={16}/></button>
+                                        <button onClick={() => { setCategories(categories.filter(c => c !== cat)); setItems(items.map(kb => kb.category === cat ? { ...kb, category: 'Разное' } : kb)); if(addLog) addLog('Удаление раздела', `Удален раздел "${cat}"`, 'warning'); }} className="text-gray-400 hover:text-red-400 p-1"><Icons.Trash2 size={16}/></button>
                                     </div>
                                 )}
                             </div>

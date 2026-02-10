@@ -4,8 +4,8 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { User, AiStats, BotConfig, Group, LogEntry } from '../types';
 import { Icons } from './Icons';
 import { apiCall, getAIResponse } from '../services/api';
-import { saveData } from '../services/firebase';
 
+// Encrypted Settings Password: 8952 -> ODk1Mg==
 const SETTINGS_HASH = "ODk1Mg==";
 
 interface DashboardProps {
@@ -79,9 +79,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     };
     
     const handleSave = (section: 'ai' | 'ban') => {
-        // Explicitly Save Config to Firebase
-        saveData('config', config);
-        
+        setConfig({...config}); 
         setAiSaveStatus('Сохранено!');
         if (addLog) addLog('Настройки', `Обновлены настройки ${section === 'ai' ? 'AI' : 'Бан-лист'}`, 'info');
         setTimeout(() => setAiSaveStatus(''), 2000);
@@ -89,25 +87,29 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
 
     const toggleGroup = (groupId: string) => {
         if (!setGroups) return;
-        setGroups(prev => {
-             const newGroups = {
-                ...prev,
-                [groupId]: { ...prev[groupId], isDisabled: !prev[groupId].isDisabled }
-             };
-             saveData('groups', newGroups);
-             return newGroups;
-        });
+        setGroups(prev => ({
+            ...prev,
+            [groupId]: { ...prev[groupId], isDisabled: !prev[groupId].isDisabled }
+        }));
     };
 
     const handleSendTopToAdmins = async () => {
         const top = getTopQuestions().slice(0, 10);
         if (top.length === 0) return alert("Нет данных для отчета");
-        const report = `📊 <b>ТОП-10 Вопросов Хеликсу:</b>\n\n` + top.map((t, i) => `${i+1}. ${t.query} (${t.count})`).join('\n');
+        
+        const report = `📊 <b>ТОП-10 Вопросов Хеликсу:</b>\n\n` + 
+                       top.map((t, i) => `${i+1}. ${t.query} (${t.count})`).join('\n');
+                       
         const admins = (Object.values(users) as User[]).filter(u => u.role === 'admin');
+        let sentCount = 0;
+        
         for (const admin of admins) {
             await apiCall('sendMessage', { chat_id: admin.id, text: report, parse_mode: 'HTML' }, config);
+            sentCount++;
         }
-        alert(`Отчет отправлен.`);
+        
+        alert(`Отчет отправлен ${sentCount} админам.`);
+        if (addLog) addLog('AI Отчет', `Топ вопросов отправлен ${sentCount} админам`, 'success');
     };
 
     const handlePlaygroundSend = async () => {
@@ -128,21 +130,19 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     
     const handleAddProfanity = () => {
         if (newProfanityWord.trim()) {
-            const currentList = Array.isArray(config.customProfanityList) ? config.customProfanityList : [];
+            const currentList = config.customProfanityList || [];
             if (!currentList.includes(newProfanityWord.trim())) {
                 const newList = [...currentList, newProfanityWord.trim()];
                 setConfig({ ...config, customProfanityList: newList });
-                saveData('config/customProfanityList', newList); // Direct Save
             }
             setNewProfanityWord('');
         }
     };
 
     const handleRemoveProfanity = (word: string) => {
-        const currentList = Array.isArray(config.customProfanityList) ? config.customProfanityList : [];
+        const currentList = config.customProfanityList || [];
         const newList = currentList.filter(w => w !== word);
         setConfig({ ...config, customProfanityList: newList });
-        saveData('config/customProfanityList', newList); // Direct Save
     };
 
     const getActivityData = () => {
@@ -156,23 +156,18 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
             const dateStr = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
             dataMap.set(dateStr, { date: dateStr, messages: 0, ai: 0 });
         }
-        
-        // Safeguard against missing users/history
-        if (users) {
-            Object.values(users).forEach(user => {
-                if (user && user.history) {
-                    user.history.forEach(msg => {
-                        const msgDate = msg.timestamp ? new Date(msg.timestamp) : new Date();
-                        if (msgDate.getFullYear() === year && msgDate.getMonth() === month && msg.isGroup) {
-                            const dateStr = msgDate.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-                            if (dataMap.has(dateStr)) dataMap.get(dateStr)!.messages += 1;
-                        }
-                    });
-                }
-            });
-        }
-        
-        if (aiStats && aiStats.history) {
+        userArray.forEach(user => {
+            if (user.history) {
+                user.history.forEach(msg => {
+                    const msgDate = msg.timestamp ? new Date(msg.timestamp) : new Date();
+                    if (msgDate.getFullYear() === year && msgDate.getMonth() === month && msg.isGroup) {
+                        const dateStr = msgDate.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+                        if (dataMap.has(dateStr)) dataMap.get(dateStr)!.messages += 1;
+                    }
+                });
+            }
+        });
+        if (aiStats.history) {
             aiStats.history.forEach(stat => {
                  const d = new Date(stat.time);
                  if (d.getFullYear() === year && d.getMonth() === month) {
@@ -234,6 +229,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
 
         return (
              <div className="space-y-6">
+                 {/* AI Settings Block */}
                  <div className="bg-[#121214] p-6 rounded-2xl border border-gray-800 shadow-xl relative overflow-hidden flex flex-col h-full">
                     <div className="flex justify-between items-center mb-6 border-b border-gray-800 pb-4">
                         <h2 className="text-xl font-bold text-white flex items-center gap-2">
@@ -242,31 +238,38 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                     
                     <div className="space-y-6 relative z-10 flex-1 overflow-y-auto custom-scrollbar pr-2 pb-20">
+                        
+                        {/* New Model Selector */}
                         <div>
-                            <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Модель AI</label>
+                            <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Модель AI (Ядро)</label>
                             <select value={config.aiModel || 'llama-3.3-70b-versatile'} onChange={e => setConfig({...config, aiModel: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
                                 <option value="llama-3.3-70b-versatile">🧠 Llama 3.3 70B (Основная)</option>
                                 <option value="llama-3.1-8b-instant">⚡ Llama 3.1 8B (Быстрая)</option>
                             </select>
+                            <p className="text-[10px] text-gray-500 mt-1">70B умнее и лучше держит контекст. 8B работает быстрее.</p>
                         </div>
                         
+                        {/* AI Accuracy / Strictness Slider */}
                         <div>
                             <div className="flex justify-between mb-1">
-                                <label className="text-xs text-gray-400 font-bold uppercase block">Точность / Строгость (100% = Только База Знаний)</label>
-                                <span className={`text-xs font-bold ${config.aiStrictness >= 90 ? 'text-green-500' : config.aiStrictness >= 50 ? 'text-yellow-500' : 'text-red-500'}`}>
+                                <label className="text-xs text-gray-400 font-bold uppercase block">Точность / Строгость</label>
+                                <span className={`text-xs font-bold ${config.aiStrictness >= 80 ? 'text-green-500' : config.aiStrictness >= 50 ? 'text-yellow-500' : 'text-red-500'}`}>
                                     {config.aiStrictness || 80}%
                                 </span>
                             </div>
                             <input 
-                                type="range" min="0" max="100" step="10"
+                                type="range" 
+                                min="0" 
+                                max="100" 
+                                step="10"
                                 value={config.aiStrictness || 80} 
                                 onChange={e => setConfig({...config, aiStrictness: parseInt(e.target.value)})}
                                 className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
                             />
                             <div className="flex justify-between text-[10px] text-gray-500 mt-1">
-                                <span>Фантазия</span>
+                                <span>Креатив (Выдумывает)</span>
                                 <span>Баланс</span>
-                                <span>100% Только факты</span>
+                                <span>Только факты (БЗ)</span>
                             </div>
                         </div>
 
@@ -303,9 +306,10 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                             </label>
                         </div>
 
+                        {/* Custom Profanity List Manager */}
                          {config.aiProfanity && (
                             <div className="bg-gray-900/30 p-4 rounded-xl border border-gray-700 animate-slideIn">
-                                <label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Свои словечки (База для мата)</label>
+                                <label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Свои словечки (База)</label>
                                 <div className="flex gap-2 mb-2">
                                     <input 
                                         value={newProfanityWord} 
@@ -318,9 +322,9 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                 </div>
                                 <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto custom-scrollbar p-1">
                                     {(config.customProfanityList || []).map((word, i) => (
-                                        <span key={`${word}-${i}`} className="bg-red-900/20 text-red-200 border border-red-800 px-2 py-1 rounded text-xs flex items-center gap-2">
+                                        <span key={i} className="bg-red-900/20 text-red-200 border border-red-800 px-2 py-1 rounded text-xs flex items-center gap-2">
                                             {word}
-                                            <button onClick={() => handleRemoveProfanity(word)} className="hover:text-white transition-all"><Icons.X size={12}/></button>
+                                            <button onClick={() => handleRemoveProfanity(word)} className="hover:text-white"><Icons.X size={12}/></button>
                                         </span>
                                     ))}
                                     {(!config.customProfanityList || config.customProfanityList.length === 0) && <span className="text-gray-500 text-xs italic">Список пуст</span>}
@@ -329,17 +333,17 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                         )}
 
                          <div className="flex gap-2 pt-4">
-                            <button onClick={() => setShowPlayground(true)} className="flex-1 bg-gray-800 text-purple-300 border border-purple-900/30 py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-gray-700 transition-colors">
-                                <Icons.Terminal size={18}/> Тест AI
+                            <button onClick={() => setShowPlayground(true)} className="flex-1 bg-gray-800 text-purple-300 border border-purple-900/30 py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-gray-700">
+                                <Icons.Terminal size={18}/> Тест
                             </button>
-                            <button onClick={() => handleSave('ai')} className="flex-[2] bg-purple-600 hover:bg-purple-500 text-white py-3 rounded-xl font-bold shadow-lg shadow-purple-900/20 transition-all">
+                            <button onClick={() => handleSave('ai')} className="flex-[2] bg-purple-600 hover:bg-purple-500 text-white py-3 rounded-xl font-bold shadow-lg shadow-purple-900/20">
                                 {aiSaveStatus || 'Сохранить настройки'}
                             </button>
                         </div>
                     </div>
                  </div>
-                 
-                 {/* Playground Modal */}
+
+                {/* Playground Modal */}
                 {showPlayground && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowPlayground(false)}>
                         <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl animate-slideIn flex flex-col h-[600px]" onClick={e => e.stopPropagation()}>
@@ -401,7 +405,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     actionIcon={Icons.Send}
                 />
             </div>
-            {/* Charts Area */}
+
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
                 <div className="xl:col-span-2 bg-[#121214] p-6 rounded-2xl border border-gray-800 shadow-xl">
                     <div className="flex items-center justify-between mb-6">
@@ -418,10 +422,16 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                         <ResponsiveContainer width="100%" height="100%">
                             <AreaChart data={getActivityData()}>
                                 <defs>
-                                    <linearGradient id="colorMsg" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3}/><stop offset="95%" stopColor="#3B82F6" stopOpacity={0}/></linearGradient>
-                                    <linearGradient id="colorAi" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#8B5CF6" stopOpacity={0.3}/><stop offset="95%" stopColor="#8B5CF6" stopOpacity={0}/></linearGradient>
+                                    <linearGradient id="colorMsg" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3}/>
+                                        <stop offset="95%" stopColor="#3B82F6" stopOpacity={0}/>
+                                    </linearGradient>
+                                    <linearGradient id="colorAi" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#8B5CF6" stopOpacity={0.3}/>
+                                        <stop offset="95%" stopColor="#8B5CF6" stopOpacity={0}/>
+                                    </linearGradient>
                                 </defs>
-                                <XAxis dataKey="date" stroke="#4b5563" fontSize={10} tickLine={false} axisLine={false} dy={10} interval="preserveStartEnd" />
+                                <XAxis dataKey="date" stroke="#4b5563" fontSize={10} tickLine={false} axisLine={false} dy={10} interval={Math.floor(getActivityData().length / 6)} />
                                 <YAxis stroke="#4b5563" fontSize={12} tickLine={false} axisLine={false} dx={-10} allowDecimals={false} />
                                 <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
                                 <Tooltip contentStyle={{backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '12px'}} />
@@ -432,8 +442,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                 </div>
                 
-                {/* Audit Logs and other modals remain mostly unchanged */}
-                 <div className="bg-[#121214] rounded-2xl border border-gray-800 shadow-xl flex flex-col h-full overflow-hidden">
+                <div className="bg-[#121214] rounded-2xl border border-gray-800 shadow-xl flex flex-col h-full overflow-hidden">
                     <div className="p-6 border-b border-gray-800 text-center bg-gradient-to-b from-gray-900 to-[#121214]">
                         <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3 text-white transition-all duration-500 ${isAiThinking ? 'bg-purple-600 shadow-[0_0_20px_rgba(147,51,234,0.5)] scale-110' : 'bg-gray-800'}`}>
                             {isAiThinking ? <Icons.Sparkles size={24} className="animate-spin-slow"/> : <Icons.Zap size={24}/>}
@@ -460,10 +469,9 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                 </div>
             </div>
-            
-            {/* Modal Logic (Active Users, Groups, AI Stats) */}
-            {/* Kept as is, just wrapped in correct conditional rendering in return */}
-             {showActiveModal && (
+
+            {/* KEEP EXISTING MODALS (Group, Active, AI) */}
+            {showActiveModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowActiveModal(false)}>
                     <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl p-6 animate-slideIn" onClick={e => e.stopPropagation()}>
                          <div className="flex justify-between items-center mb-6">
@@ -504,7 +512,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                 </div>
             )}
-             
+
             {showAiModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowAiModal(false)}>
                     <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-4xl shadow-2xl animate-slideIn p-6" onClick={e => e.stopPropagation()}>
@@ -548,7 +556,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                 </div>
             )}
-
         </div>
     );
 };
