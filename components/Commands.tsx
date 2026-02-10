@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { Icons } from './Icons';
 import { Command, InlineButton } from '../types';
+import { saveData } from '../services/firebase';
 
 interface CommandsProps {
     commands: Command[];
@@ -45,17 +46,22 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
             color: currentCmd.color 
         };
 
+        let newCommands;
         if (currentCmd.id) {
-            setCommands(commands.map(c => c.id === currentCmd.id ? newCmd : c));
+            newCommands = commands.map(c => c.id === currentCmd.id ? newCmd : c);
         } else {
-            setCommands([...commands, newCmd]);
+            newCommands = [...commands, newCmd];
         }
+        setCommands(newCommands);
+        saveData('commands', newCommands); // Explicit Save
         setIsEditing(false);
         setPreviewMedia(null);
     };
 
     const handleDelete = (id: string | number) => {
-        setCommands(commands.filter(c => c.id !== id));
+        const newCommands = commands.filter(c => c.id !== id);
+        setCommands(newCommands);
+        saveData('commands', newCommands); // Explicit Save
         setIsEditing(false);
     };
     

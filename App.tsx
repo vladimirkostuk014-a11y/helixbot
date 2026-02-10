@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Icons } from './components/Icons';
 import Dashboard from './components/Dashboard';
 import LiveChat from './components/LiveChat';
@@ -13,7 +13,6 @@ import { apiCall } from './services/api';
 import UserCRM from './components/UserCRM';
 import { subscribeToData, saveData, removeData } from './services/firebase'; 
 
-// Encrypted Password: 88005553535 -> Base64
 const SECURE_HASH = "ODgwMDU1NTM1MzU=";
 
 const HARDCODED_CONFIG = {
@@ -39,8 +38,7 @@ const App = () => {
     const [activeTab, setActiveTab] = useState('dashboard');
     const [isBotActive, setIsBotActive] = useState(true); 
     const [lastHeartbeat, setLastHeartbeat] = useState(0);
-    const [loadedSections, setLoadedSections] = useState<Set<string>>(new Set());
-    const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Mobile sidebar state
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false); 
     
     // Config
     const [config, setConfig] = useState<BotConfig>({
@@ -63,7 +61,7 @@ const App = () => {
         customProfanityList: [],
         aiTemperature: 0.3,
         aiMaxTokens: 1000,
-        aiStrictness: 80, // Default High Accuracy
+        aiStrictness: 80, 
         bannedWords: '' 
     });
     
@@ -86,8 +84,7 @@ const App = () => {
     const [commands, setCommands] = useState<Command[]>([]);
     const [aiStats, setAiStats] = useState<AiStats>({ total: 0, history: [] }); 
 
-    const markLoaded = (section: string) => setLoadedSections(prev => new Set(prev).add(section));
-    const canSave = (section: string) => loadedSections.has(section);
+    const prevConfigRef = useRef<string>('');
 
     // Auth Check on Mount
     useEffect(() => {
@@ -123,7 +120,16 @@ const App = () => {
             if (unsub) unsubs.push(unsub);
         };
 
-        sub('config', (val) => { if (val) setConfig(prev => ({ ...prev, ...val })); markLoaded('config'); });
+        // READ-ONLY SUBSCRIPTIONS (Update Local State)
+        sub('config', (val) => { 
+            if (val) {
+                setConfig(prev => {
+                    const next = { ...prev, ...val };
+                    prevConfigRef.current = JSON.stringify(next); // Sync ref to avoid loop
+                    return next;
+                });
+            } 
+        });
         sub('status/heartbeat', (val) => { if (val) setLastHeartbeat(val); });
         sub('status/active', (val) => { setIsBotActive(val !== false); });
         sub('users', (val) => { 
@@ -132,49 +138,51 @@ const App = () => {
                 Object.values(s).forEach((u: any) => { if(!u.history) u.history = []; else u.history = toArray(u.history); }); 
                 setUsers(s); 
             } else setUsers({}); 
-            markLoaded('users'); 
         });
-        sub('groups', (val) => { setGroups(val || {}); markLoaded('groups'); }); 
-        sub('knowledgeBase', (val) => { setKnowledgeBase(toArray(val)); markLoaded('knowledgeBase'); });
-        sub('commands', (val) => { setCommands(toArray(val)); markLoaded('commands'); });
-        sub('quickReplies', (val) => { setQuickReplies(toArray(val)); markLoaded('quickReplies'); });
-        sub('auditLogs', (val) => { setAuditLogs(toArray(val)); markLoaded('auditLogs'); });
+        sub('groups', (val) => { setGroups(val || {}); }); 
+        sub('knowledgeBase', (val) => { setKnowledgeBase(toArray(val)); });
+        sub('commands', (val) => { setCommands(toArray(val)); });
+        sub('quickReplies', (val) => { setQuickReplies(toArray(val)); });
+        sub('auditLogs', (val) => { setAuditLogs(toArray(val)); });
         
         sub('aiStats', (val) => { 
             if (val) { 
-                const newStats = {
+                setAiStats({
                     total: val.total || 0,
                     history: val.history ? toArray<AiStat>(val.history) : []
-                };
-                setAiStats(newStats); 
+                }); 
             } else {
                 setAiStats({total: 0, history: []});
             }
-            markLoaded('aiStats'); 
         });
         
-        sub('categories', (val) => { if(val) setCategories(toArray(val)); markLoaded('categories'); });
-        sub('topicNames', (val) => { if(val) setTopicNames(val); markLoaded('topicNames'); });
-        sub('topicUnreads', (val) => { if(val) setTopicUnreads(val); else setTopicUnreads({}); markLoaded('topicUnreads'); });
-        sub('disabledAiTopics', (val) => { if(val) setDisabledAiTopics(toArray(val)); else setDisabledAiTopics([]); markLoaded('disabledAiTopics'); });
-        sub('topicHistory', (val) => { if(val) { const cleanHistory: Record<string, any[]> = {}; Object.entries(val).forEach(([k, v]) => { cleanHistory[k] = toArray(v); }); setTopicHistory(cleanHistory); } else setTopicHistory({}); markLoaded('topicHistory'); });
-        sub('calendarEvents', (val) => { setCalendarEvents(toArray(val)); markLoaded('calendarEvents'); });
-        sub('calendarCategories', (val) => { if(val) setCalendarCategories(toArray(val)); markLoaded('calendarCategories'); });
+        sub('categories', (val) => { if(val) setCategories(toArray(val)); });
+        sub('topicNames', (val) => { if(val) setTopicNames(val); });
+        sub('topicUnreads', (val) => { if(val) setTopicUnreads(val); else setTopicUnreads({}); });
+        sub('disabledAiTopics', (val) => { if(val) setDisabledAiTopics(toArray(val)); else setDisabledAiTopics([]); });
+        sub('topicHistory', (val) => { 
+            if(val) { 
+                const cleanHistory: Record<string, any[]> = {}; 
+                Object.entries(val).forEach(([k, v]) => { cleanHistory[k] = toArray(v); }); 
+                setTopicHistory(cleanHistory); 
+            } else setTopicHistory({}); 
+        });
+        sub('calendarEvents', (val) => { setCalendarEvents(toArray(val)); });
+        sub('calendarCategories', (val) => { if(val) setCalendarCategories(toArray(val)); });
 
         return () => unsubs.forEach(fn => fn && fn());
     }, [isAuthenticated]);
 
-    // --- AUTO-SAVE ---
-    useEffect(() => { if (canSave('config')) saveData('config', config); }, [config, loadedSections]);
-    useEffect(() => { if (canSave('users')) saveData('users', users); }, [users, loadedSections]);
-    useEffect(() => { if (canSave('groups')) saveData('groups', groups); }, [groups, loadedSections]);
-    useEffect(() => { if (canSave('knowledgeBase')) saveData('knowledgeBase', knowledgeBase); }, [knowledgeBase, loadedSections]);
-    useEffect(() => { if (canSave('commands')) saveData('commands', commands); }, [commands, loadedSections]);
-    useEffect(() => { if (canSave('categories')) saveData('categories', categories); }, [categories, loadedSections]);
-    useEffect(() => { if (canSave('topicNames')) saveData('topicNames', topicNames); }, [topicNames, loadedSections]);
-    useEffect(() => { if (canSave('disabledAiTopics')) saveData('disabledAiTopics', disabledAiTopics); }, [disabledAiTopics, loadedSections]);
-    useEffect(() => { if (canSave('quickReplies')) saveData('quickReplies', quickReplies); }, [quickReplies, loadedSections]);
-    
+    // --- AUTO-SAVE CONFIG ONLY (Safe Check) ---
+    useEffect(() => {
+        if (!isAuthenticated) return;
+        const json = JSON.stringify(config);
+        if (prevConfigRef.current !== json) {
+            saveData('config', config);
+            prevConfigRef.current = json;
+        }
+    }, [config, isAuthenticated]);
+
     // --- ACTIONS ---
     const toggleBotStatus = () => {
         const newState = !isBotActive;
@@ -211,7 +219,7 @@ const App = () => {
     const handleCalendarUpdate = (action: React.SetStateAction<CalendarEvent[]>) => {
         setCalendarEvents(prev => {
             const newValue = typeof action === 'function' ? action(prev) : action;
-            setTimeout(() => saveData('calendarEvents', newValue), 0);
+            saveData('calendarEvents', newValue); // Explicit Save
             return newValue;
         });
     };
@@ -221,7 +229,7 @@ const App = () => {
         const newGroups = { ...groups };
         delete newGroups[groupId];
         setGroups(newGroups);
-        saveData('groups', newGroups);
+        saveData('groups', newGroups); // Explicit Save
         addLog('Группы', `Группа ${groupId} удалена`, 'danger');
     };
 
@@ -233,13 +241,14 @@ const App = () => {
         topicMsgs.forEach(msg => {
             if (msg.userId && msg.isIncoming) userIdsInTopic.add(msg.userId);
         });
+        
         const updatedUsers = { ...users };
         let hasChanges = false;
         userIdsInTopic.forEach(uid => {
             const user = updatedUsers[uid];
             if (user && user.unreadCount && user.unreadCount > 0) {
                 updatedUsers[uid] = { ...user, unreadCount: 0 };
-                saveData(`users/${uid}/unreadCount`, 0);
+                saveData(`users/${uid}/unreadCount`, 0); // Explicit Save per user
                 hasChanges = true;
             }
         });
@@ -291,7 +300,7 @@ const App = () => {
             };
             const updatedTopicHistory = [...(topicHistory[topicId] || []), newMsg];
             setTopicHistory(prev => ({ ...prev, [topicId]: updatedTopicHistory }));
-            saveData(`topicHistory/${topicId}`, updatedTopicHistory);
+            saveData(`topicHistory/${topicId}`, updatedTopicHistory); // Explicit Save
 
         } catch (e) {
             console.error(e);
@@ -382,7 +391,7 @@ const App = () => {
                         </div>
                         <div>
                             <h1 className="text-xl font-bold text-white tracking-tight">Бот Helix</h1>
-                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v9.8</span>
+                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v10.0</span>
                         </div>
                     </div>
                 </div>
