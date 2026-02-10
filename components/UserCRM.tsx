@@ -17,6 +17,7 @@ interface UserCRMProps {
 const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames = {}, addLog }) => {
     const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
+    const [viewFilter, setViewFilter] = useState<'all' | 'banned' | 'muted'>('all'); // NEW FILTER STATE
     
     // Chat Inputs
     const [msgText, setMsgText] = useState('');
@@ -42,12 +43,22 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
         }
     }, [selectedUser, selectedUser?.history]); 
 
+    // CHANGE: Update User Role (with DB Save)
+    const toggleUserRole = (role: 'user' | 'admin') => {
+        if (!selectedUser) return;
+        setUsers(prev => ({...prev, [selectedUser.id]: {...selectedUser, role: role}}));
+        saveData(`users/${selectedUser.id}/role`, role);
+    };
+
     const getFilteredUsers = () => {
         return (Object.values(users) as User[]).filter((u: User) => {
             if (!u) return false;
-            // Filter out system IDs and invalid IDs
             if (u.id < 0 || u.id === 777000 || u.id === 1087968824) return false;
             
+            // Apply View Filter
+            if (viewFilter === 'banned' && u.status !== 'banned') return false;
+            if (viewFilter === 'muted' && u.status !== 'muted') return false;
+
             if (searchTerm) {
                 const term = searchTerm.toLowerCase();
                 const name = u.name ? u.name.toLowerCase() : '';
@@ -60,6 +71,32 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
             if ((b.unreadCount || 0) !== (a.unreadCount || 0)) return (b.unreadCount || 0) - (a.unreadCount || 0);
             return new Date(b.lastSeen || 0).getTime() - new Date(a.lastSeen || 0).getTime();
         });
+    };
+    
+    const filteredUsers = getFilteredUsers();
+
+    // NEW: Clear List Functionality
+    const handleClearList = async () => {
+        if (viewFilter === 'all') return;
+        const count = filteredUsers.length;
+        if (count === 0) return;
+        
+        if (window.confirm(`Вы уверены? Будет удалено ${count} пользователей из списка "${viewFilter === 'banned' ? 'Забаненные' : 'Мут'}".\nЭто действие необратимо.`)) {
+            // Remove from local state
+            setUsers(prev => {
+                const newState = { ...prev };
+                filteredUsers.forEach(u => delete newState[String(u.id)]);
+                return newState;
+            });
+            
+            // Remove from DB (loop)
+            for (const u of filteredUsers) {
+                await removeData(`users/${u.id}`);
+            }
+            
+            setSelectedUserId(null);
+            if(addLog) addLog('CRM', `Очищен список ${viewFilter} (${count} чел.)`, 'danger');
+        }
     };
 
     const handleSendMessage = async () => {
@@ -129,24 +166,17 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
         setBtnDraft({ text: '', url: '' });
     };
 
-    // Helper to delete user by ID (used in list and detailed view)
     const performDeleteUser = async (userId: number, userName: string) => {
         if (window.confirm(`ВНИМАНИЕ! Вы хотите удалить пользователя ${userName} из базы данных навсегда?\nВся история переписки будет стерта.`)) {
-             // 1. Clear selection if deleted user is selected
             if (selectedUserId === userId) {
                 setSelectedUserId(null);
             }
-
-            // 2. Optimistic update
             setUsers(prev => {
                 const n = {...prev};
                 delete n[String(userId)];
                 return n;
             });
-
-            // 3. Perform delete
             await removeData(`users/${userId}`);
-            
             if (addLog) addLog('CRM', `Пользователь ${userName} удален из базы вручную`, 'danger');
         }
     }
@@ -197,7 +227,6 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
 
     const handleBanAction = async (action: 'ban' | 'unban' | 'kick') => {
         if (!selectedUserId || !selectedUser) return;
-        
         if (!window.confirm(`Вы уверены, что хотите ${action} пользователя ${selectedUser.name}?`)) return;
 
         try {
@@ -241,12 +270,26 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
         <div className="flex h-full bg-[#0c0c0e] rounded-2xl overflow-hidden border border-gray-800 shadow-2xl">
             {/* Left Side: User List */}
             <div className={`w-full md:w-80 flex flex-col border-r border-gray-800 bg-[#121214] ${selectedUser ? 'hidden md:flex' : 'flex'}`}>
-                <div className="p-4 border-b border-gray-800 bg-gray-900/50">
-                    <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Поиск (ID, Имя, @username)..." className="w-full bg-black/40 border border-gray-700 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-blue-500 transition-colors"/>
+                <div className="p-4 border-b border-gray-800 bg-gray-900/50 space-y-3">
+                    <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Поиск (ID, Имя)..." className="w-full bg-black/40 border border-gray-700 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-blue-500 transition-colors"/>
+                    
+                    {/* FILTERS */}
+                    <div className="flex gap-1 bg-gray-900 rounded-lg p-1 border border-gray-800">
+                        <button onClick={() => setViewFilter('all')} className={`flex-1 text-[10px] font-bold py-1.5 rounded transition-colors ${viewFilter === 'all' ? 'bg-blue-600 text-white shadow' : 'text-gray-500 hover:text-white'}`}>ВСЕ</button>
+                        <button onClick={() => setViewFilter('banned')} className={`flex-1 text-[10px] font-bold py-1.5 rounded transition-colors ${viewFilter === 'banned' ? 'bg-red-600 text-white shadow' : 'text-gray-500 hover:text-white'}`}>БАН</button>
+                        <button onClick={() => setViewFilter('muted')} className={`flex-1 text-[10px] font-bold py-1.5 rounded transition-colors ${viewFilter === 'muted' ? 'bg-yellow-600 text-white shadow' : 'text-gray-500 hover:text-white'}`}>МУТ</button>
+                    </div>
+
+                    {/* CLEAR LIST BUTTON (Visible only if filtered and has items) */}
+                    {viewFilter !== 'all' && filteredUsers.length > 0 && (
+                        <button onClick={handleClearList} className="w-full bg-red-900/30 border border-red-500/30 text-red-400 text-xs font-bold py-1.5 rounded hover:bg-red-900/50 transition-colors flex items-center justify-center gap-2">
+                             <Icons.Trash2 size={12}/> Очистить список ({filteredUsers.length})
+                        </button>
+                    )}
                 </div>
                 <div className="flex-1 overflow-y-auto custom-scrollbar">
-                    {getFilteredUsers().length === 0 && <div className="text-center text-gray-500 py-10 text-xs">Нет данных</div>}
-                    {getFilteredUsers().map((u: User) => (
+                    {filteredUsers.length === 0 && <div className="text-center text-gray-500 py-10 text-xs">Нет данных</div>}
+                    {filteredUsers.map((u: User) => (
                         <div key={u.id} onClick={() => setSelectedUserId(u.id)} className={`group relative p-3 border-b border-gray-800/30 cursor-pointer hover:bg-gray-800/50 transition-all ${selectedUserId === u.id ? 'bg-blue-900/10 border-l-4 border-l-blue-500' : 'border-l-4 border-l-transparent'} ${u.status === 'banned' ? 'opacity-80 bg-red-900/10' : ''}`}>
                             <div className="flex items-center gap-3">
                                 <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0 shadow-lg relative ${u.status === 'banned' ? 'bg-red-900 text-red-200' : u.role === 'admin' ? 'bg-yellow-500 text-black' : 'bg-gray-700 text-gray-300'}`}>
@@ -267,7 +310,6 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
                                 </div>
                                 {u.unreadCount ? (<span className="bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{u.unreadCount}</span>) : u.warnings > 0 && (<span className="bg-yellow-900/50 text-yellow-400 text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1">{u.warnings}⚠️</span>)}
                             </div>
-                            {/* Delete button on hover for list item */}
                             <button 
                                 onClick={(e) => { e.stopPropagation(); performDeleteUser(u.id, u.name); }} 
                                 className="absolute right-2 top-1/2 -translate-y-1/2 bg-red-900/80 text-white p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-700"
@@ -434,8 +476,8 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
                             <div>
                                 <h3 className="text-xs font-bold text-gray-500 uppercase mb-2">Роль</h3>
                                 <div className="grid grid-cols-2 gap-2">
-                                    <button onClick={() => setUsers(prev => ({...prev, [selectedUser.id]: {...selectedUser, role: 'user'}}))} className={`py-1.5 rounded text-xs font-bold border ${selectedUser.role === 'user' ? 'bg-blue-600 text-white border-blue-500' : 'bg-transparent text-gray-500 border-gray-700'}`}>User</button>
-                                    <button onClick={() => setUsers(prev => ({...prev, [selectedUser.id]: {...selectedUser, role: 'admin'}}))} className={`py-1.5 rounded text-xs font-bold border ${selectedUser.role === 'admin' ? 'bg-yellow-600 text-black border-yellow-500' : 'bg-transparent text-gray-500 border-gray-700'}`}>Admin</button>
+                                    <button onClick={() => toggleUserRole('user')} className={`py-1.5 rounded text-xs font-bold border ${selectedUser.role === 'user' ? 'bg-blue-600 text-white border-blue-500' : 'bg-transparent text-gray-500 border-gray-700'}`}>User</button>
+                                    <button onClick={() => toggleUserRole('admin')} className={`py-1.5 rounded text-xs font-bold border ${selectedUser.role === 'admin' ? 'bg-yellow-600 text-black border-yellow-500' : 'bg-transparent text-gray-500 border-gray-700'}`}>Admin</button>
                                 </div>
                             </div>
                         </div>

@@ -55,6 +55,12 @@ sync('aiStats', 'aiStats');
 sync('disabledAiTopics', 'disabledAiTopics', true);
 onValue(ref(db, 'status/active'), (s) => state.isBotActive = s.val() !== false);
 
+// --- HEARTBEAT (FIX OFFLINE STATUS) ---
+setInterval(() => {
+    // Updates timestamp every 10s so frontend knows bot is alive
+    firebaseUpdate(ref(db, 'status'), { heartbeat: Date.now() });
+}, 10000);
+
 // ==========================================
 // 3. API TELEGRAM
 // ==========================================
@@ -75,10 +81,8 @@ const apiCall = async (method, body) => {
 // ==========================================
 setInterval(async () => {
     const now = new Date();
-    // MSK is UTC+3. 
     const mskHours = (now.getUTCHours() + 3) % 24;
     
-    // Check if it is 00:00 MSK (allowing a 1-minute window)
     if (mskHours === 0 && now.getMinutes() === 0) {
         if (!dailyTopSent && state.config.enableAutoTop) {
             await sendDailyTop();
@@ -87,19 +91,17 @@ setInterval(async () => {
     } else {
         dailyTopSent = false;
     }
-}, 30000); // Check every 30 seconds
+}, 30000);
 
 const sendDailyTop = async () => {
     if (!state.config.targetChatId) return;
 
-    // 1. Get Users sorted by dailyMsgCount
     const sortedUsers = Object.values(state.users)
         .filter(u => u.dailyMsgCount > 0)
         .sort((a, b) => b.dailyMsgCount - a.dailyMsgCount)
         .slice(0, 10);
 
     if (sortedUsers.length > 0) {
-        // 2. Form Message
         const topCommand = state.commands.find(c => c.trigger === '_daily_top_');
         let title = topCommand ? topCommand.response : "🏆 <b>Топ активных участников за день:</b>";
         
@@ -109,7 +111,6 @@ const sendDailyTop = async () => {
             msg += `${medal} <b>${u.name}</b>: ${u.dailyMsgCount} сбщ.\n`;
         });
 
-        // 3. Send
         await apiCall('sendMessage', {
             chat_id: state.config.targetChatId,
             text: msg,
@@ -118,8 +119,6 @@ const sendDailyTop = async () => {
         });
     }
 
-    // 4. Reset Daily Counters
-    // Batch update via root (requires careful path construction, doing loop for safety here)
     for (const uid of Object.keys(state.users)) {
         await firebaseUpdate(ref(db, `users/${uid}`), { dailyMsgCount: 0 });
     }
@@ -127,39 +126,59 @@ const sendDailyTop = async () => {
 };
 
 // ==========================================
-// 5. AI LOGIC
+// 5. AI LOGIC (STRICT)
 // ==========================================
 const getAIResponse = async (question, userName) => {
     const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiStrictness, customProfanityList } = state.config;
     if (!openaiApiKey) return "⚠️ Ключ AI не найден.";
 
     const kbContent = state.knowledgeBase.length > 0 
-        ? state.knowledgeBase.map(k => `[ТЕМА: ${k.title}]\n${k.response}`).join('\n\n')
+        ? state.knowledgeBase.map(k => `[TITLE: ${k.title} (Cat: ${k.category})]\n${k.response}`).join('\n\n')
         : "База знаний пуста.";
 
-    const accuracy = aiStrictness || 80;
-    const temp = accuracy >= 95 ? 0.0 : Math.max(0.1, 1 - (accuracy / 100));
-
-    let strictRule = "";
-    if (accuracy >= 95) {
-        strictRule = `
-РЕЖИМ 100% ТОЧНОСТИ (ONLY FACTS):
-- Твой единственный источник информации — раздел [KNOWLEDGE BASE] ниже.
-- ТЕБЕ ЗАПРЕЩЕНО использовать свои встроенные знания или придумывать факты.
-- Если ответа нет в [KNOWLEDGE BASE], ты ОБЯЗАН ответить: "Информации нет в базе" (в стиле своего персонажа).`;
+    const strictness = aiStrictness || 80;
+    
+    // Logic: 
+    // If strictness >= 90: It MUST rely on context for data.
+    // If strictness == 100: It ONLY answers from context, no small talk.
+    
+    let strictInstructions = "";
+    
+    if (strictness >= 90) {
+        strictInstructions = `
+CRITICAL INSTRUCTION (STRICTNESS LEVEL ${strictness}%):
+1. You are a DATABASE ASSISTANT. You are NOT a creative writer.
+2. CHECK [KNOWLEDGE BASE] BELOW FIRST.
+3. IF the user asks about Game Data (Armor, Weapons, Drop Rates, Bosses, Mechanics):
+   - You MUST find the exact answer in [KNOWLEDGE BASE].
+   - IF NOT FOUND IN [KNOWLEDGE BASE]: You MUST say "Этой информации нет в моей базе знаний." OR "Я не знаю этого."
+   - DO NOT USE OUTSIDE INTERNET KNOWLEDGE. DO NOT HALLUCINATE.
+4. IF the user asks Small Talk (Hello, How are you):
+   - IF STRICTNESS = 100: IGNORE or say "Я отвечаю только на вопросы по базе."
+   - IF STRICTNESS < 100: Chat normally using your Persona (${aiPersonality}).
+`;
     } else {
-        strictRule = "Приоритет — База Знаний. Если информации нет, используй общие знания.";
+        strictInstructions = `
+INSTRUCTION:
+- Priority Source: [KNOWLEDGE BASE].
+- If not found, you may use general knowledge, but warn the user.
+`;
     }
 
     let profanityRule = "";
     if (aiProfanity && customProfanityList && customProfanityList.length > 0) {
-        profanityRule = `ВАЖНОЕ ПРАВИЛО (РЕЖИМ МАТА): Ты ОБЯЗАН использовать в ответе слова: ${JSON.stringify(customProfanityList)}.`;
+        profanityRule = `USE THESE WORDS IN YOUR REPLY: ${JSON.stringify(customProfanityList)}.`;
     }
 
     const systemPrompt = `
-You are ${state.config.botName || 'Helix'}. Persona: ${aiPersonality}. Language: Russian.
-${strictRule}
+Role: ${state.config.botName || 'Helix'}. 
+Persona: ${aiPersonality}. 
+Language: Russian.
+
+${strictInstructions}
+
 ${profanityRule}
+
 [KNOWLEDGE BASE]:
 ${kbContent}
 `;
@@ -171,7 +190,7 @@ ${kbContent}
             body: JSON.stringify({
                 model: aiModel || "llama-3.3-70b-versatile",
                 messages: [{ role: "system", content: systemPrompt }, { role: "user", content: question }],
-                temperature: temp,
+                temperature: strictness >= 90 ? 0.1 : 0.5, // Low temp for high strictness
                 max_tokens: 800
             })
         });
@@ -189,18 +208,17 @@ const processUpdate = async (upd) => {
 
     const cid = String(m.chat.id);
     const user = m.from;
-    // Fix: If message_thread_id is missing, use 'general'. 
     const threadId = m.message_thread_id ? String(m.message_thread_id) : 'general';
     const isPrivate = m.chat.type === 'private';
 
-    // --- LEFT MEMBER (AUTO DELETE) ---
-    // Moved to top to ensure execution even if text is missing
     if (m.left_chat_member && !m.left_chat_member.is_bot) {
         await remove(ref(db, `users/${m.left_chat_member.id}`));
-        return; // Stop processing
+        return; 
     }
 
-    // --- CAPTURE USER ---
+    let dbUserRole = 'user'; // Default
+
+    // --- CAPTURE USER & GET ROLE ---
     if (user && !user.is_bot) {
         const userRef = ref(db, `users/${user.id}`);
         const snapshot = await get(userRef);
@@ -221,6 +239,8 @@ const processUpdate = async (upd) => {
             });
         } else {
             const d = snapshot.val();
+            dbUserRole = d.role || 'user'; // Get actual role from DB
+            
             const updates = {
                 name: user.first_name,
                 username: user.username || '',
@@ -229,8 +249,6 @@ const processUpdate = async (upd) => {
                 dailyMsgCount: (d.dailyMsgCount || 0) + 1
             };
             
-            // CRM HISTORY LOGIC:
-            // STRICTLY Private Messages only
             if (isPrivate && m.text) {
                 const newMsg = {
                     dir: 'in',
@@ -239,25 +257,21 @@ const processUpdate = async (upd) => {
                     time: new Date().toLocaleTimeString('ru-RU'),
                     timestamp: Date.now(),
                     isIncoming: true,
-                    isGroup: false, // Explicitly mark as not group
+                    isGroup: false,
                     user: user.first_name
                 };
                 const history = d.history ? Object.values(d.history) : [];
-                // Keep last 50 messages
                 updates.history = [...history, newMsg].slice(-50);
                 updates.unreadCount = (d.unreadCount || 0) + 1;
             }
-
             await firebaseUpdate(userRef, updates);
         }
     }
 
-    // --- WELCOME (NEW MEMBERS) ---
+    // --- WELCOME ---
     if (m.new_chat_members) {
         for (const member of m.new_chat_members) {
             if (member.is_bot) continue;
-            
-            // Ensure user exists in DB
             await set(ref(db, `users/${member.id}`), {
                 id: member.id,
                 name: member.first_name,
@@ -271,27 +285,17 @@ const processUpdate = async (upd) => {
                 warnings: 0,
                 history: []
             });
-
-            // Find _welcome_ command
             const welcome = state.commands.find(c => c.trigger === '_welcome_');
             if (welcome) {
                 const nameLink = `<a href="tg://user?id=${member.id}">${member.first_name}</a>`;
                 const text = welcome.response.replace(/{user}/g, nameLink).replace(/{name}/g, member.first_name);
                 const kb = welcome.buttons?.length > 0 ? { inline_keyboard: welcome.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
-                
-                // Determine Thread ID
                 let targetThread = undefined;
-                if (welcome.notificationTopicId && welcome.notificationTopicId !== 'general') {
-                    targetThread = welcome.notificationTopicId;
-                } else if (threadId !== 'general') {
-                    targetThread = threadId;
-                }
+                if (welcome.notificationTopicId && welcome.notificationTopicId !== 'general') targetThread = welcome.notificationTopicId;
+                else if (threadId !== 'general') targetThread = threadId;
 
-                if (welcome.mediaUrl) {
-                    await apiCall('sendPhoto', { chat_id: cid, photo: welcome.mediaUrl, caption: text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThread });
-                } else {
-                    await apiCall('sendMessage', { chat_id: cid, text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThread });
-                }
+                if (welcome.mediaUrl) await apiCall('sendPhoto', { chat_id: cid, photo: welcome.mediaUrl, caption: text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThread });
+                else await apiCall('sendMessage', { chat_id: cid, text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThread });
             }
         }
     }
@@ -301,8 +305,11 @@ const processUpdate = async (upd) => {
     const txt = m.text.trim();
     const lowerTxt = txt.toLowerCase();
 
-    // --- WARN ---
+    // --- WARN (ADMIN ONLY) ---
     if (lowerTxt.startsWith('/warn') && m.reply_to_message) {
+        // Double check admin rights for command issuer
+        if (dbUserRole !== 'admin') return; 
+
         const target = m.reply_to_message.from;
         const targetRef = ref(db, `users/${target.id}`);
         const snap = await get(targetRef);
@@ -334,15 +341,19 @@ const processUpdate = async (upd) => {
         else if (cmd.matchType === 'contains') isMatch = lowerTxt.includes(cmd.trigger.toLowerCase());
 
         if (isMatch) {
-            // FIX: STRICT TOPIC RESTRICTION
+            // 1. SYSTEM COMMANDS -> ADMIN ONLY
+            if (cmd.isSystem && dbUserRole !== 'admin') {
+                return; // Ignore if user is not admin in DB
+            }
+
+            // 2. TOPIC RESTRICTION
             if (cmd.allowedTopicId) {
                 if (cmd.allowedTopicId === 'private_only') {
-                    if (!isPrivate) continue; // Command not allowed here
+                    if (!isPrivate) continue; 
                 } else {
-                    // Check against specific topic ID (compare as strings)
                     const currentTid = threadId || 'general';
-                    const allowedTid = cmd.allowedTopicId || 'general';
-                    if (String(currentTid) !== String(allowedTid)) continue; // Command not allowed here
+                    // String comparison to be safe
+                    if (String(currentTid) !== String(cmd.allowedTopicId)) continue; 
                 }
             }
 
@@ -361,12 +372,9 @@ const processUpdate = async (upd) => {
 
     // --- AI ---
     if (state.config.enableAI) {
-        // FIX: If enablePM is FALSE, we ONLY allow AI if specifically addressed (e.g. "helix ...")
-        // If enablePM is TRUE, we allow everything in PM.
         const isHelixTrigger = lowerTxt.startsWith('хеликс') || lowerTxt.startsWith('helix');
         const isPMAllowed = m.chat.type === 'private' && state.config.enablePM;
         
-        // If it's a PM, but enablePM is OFF, and it wasn't triggered by name -> IGNORE.
         if (m.chat.type === 'private' && !state.config.enablePM && !isHelixTrigger) return;
 
         if ((isHelixTrigger || isPMAllowed) && !state.disabledAiTopics.includes(threadId)) {

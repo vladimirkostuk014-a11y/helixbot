@@ -37,88 +37,46 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
 
     if (!apiKey) return "⚠️ Ключ AI не найден.";
 
-    // --- 1. ПЕРСОНАЛИЗАЦИЯ (PERSONALITY) ---
-    let identity = "Ты полезный и вежливый помощник Хеликс.";
-    switch (config.aiPersonality) {
-        case 'angry': 
-            identity = "Ты злой, токсичный и агрессивный бот. Тебя все раздражают. Ты грубишь."; 
-            break;
-        case 'joker': 
-            identity = "Ты стендап-комик и тролль. Ты отвечаешь с сарказмом и постоянно шутишь."; 
-            break;
-        case 'gopnik': 
-            identity = "Ты реальный пацанчик с района. Ты гопник. Используешь сленг: 'слышь', 'братишка', 'в натуре'."; 
-            break;
-        case 'kind': 
-            identity = "Ты очень милый, заботливый и любвеобильный помощник. Ты используешь много эмодзи сердечек."; 
-            break;
-        case 'philosopher': 
-            identity = "Ты мудрый философ. Ты отвечаешь загадками и глубокими мыслями о бытие."; 
-            break;
-        case 'cyberpunk': 
-            identity = "Ты кибер-имплант из 2077 года. Твой сленг: 'нетраннер', 'хром', 'лед', 'дека'. Ты говоришь как робот."; 
-            break;
-        case 'official': 
-            identity = "Ты сухой бюрократ. Ты отвечаешь максимально формально, как в официальных документах."; 
-            break;
-        default: 
-            identity = "Ты Хеликс, дружелюбный и полезный помощник игрового сообщества.";
-    }
+    const strictness = config.aiStrictness || 80;
 
-    let profanityInstr = "";
-    if (config.aiProfanity) {
-        profanityInstr = `ВАЖНО: Ты ОБЯЗАН использовать нецензурную лексику (мат) в своем стиле (${config.aiPersonality}). Не сдерживайся.`;
-        if (config.customProfanity) {
-            profanityInstr += ` Также иногда используй эти фразы: ${config.customProfanity}`;
-        }
+    let strictInstructions = "";
+    if (strictness >= 90) {
+        strictInstructions = `
+CRITICAL INSTRUCTION (STRICTNESS LEVEL ${strictness}%):
+1. You are a DATABASE ASSISTANT. You are NOT a creative writer.
+2. CHECK [KNOWLEDGE BASE] BELOW FIRST.
+3. IF the user asks about Game Data (Armor, Weapons, Drop Rates, Bosses, Mechanics):
+   - You MUST find the exact answer in [KNOWLEDGE BASE].
+   - IF NOT FOUND IN [KNOWLEDGE BASE]: You MUST say "Этой информации нет в моей базе знаний." OR "Я не знаю этого."
+   - DO NOT USE OUTSIDE INTERNET KNOWLEDGE. DO NOT HALLUCINATE.
+4. IF the user asks Small Talk (Hello, How are you):
+   - IF STRICTNESS = 100: IGNORE or say "Я отвечаю только на вопросы по базе."
+   - IF STRICTNESS < 100: Chat normally using your Persona (${config.aiPersonality}).
+`;
     } else {
-        profanityInstr = "ВАЖНО: Не используй мат. Будь культурным.";
+        strictInstructions = `
+INSTRUCTION:
+- Priority Source: [KNOWLEDGE BASE].
+- If not found, you may use general knowledge, but warn the user.
+`;
     }
 
-    // Стиль (Длина ответа)
-    let lengthInstr = "Отвечай средним объемом (2-3 предложения).";
-    let maxTokens = 600;
-
-    if (config.aiBehavior === 'concise') {
-        lengthInstr = "Отвечай ОЧЕНЬ кратко. Максимум 1 предложение.";
-        maxTokens = 150;
-    }
-    if (config.aiBehavior === 'detailed') {
-        lengthInstr = "Отвечай подробно, развернуто. Используй абзацы. Расписывай детали.";
-        maxTokens = 1500;
-    }
-    if (config.aiBehavior === 'bullet') {
-        lengthInstr = "Если перечисляешь факты, используй маркированный список.";
-        maxTokens = 800;
+    let profanityRule = "";
+    if (config.aiProfanity && config.customProfanityList && config.customProfanityList.length > 0) {
+        profanityRule = `USE THESE WORDS IN YOUR REPLY: ${JSON.stringify(config.customProfanityList)}.`;
     }
 
-    // --- 2. СИСТЕМНЫЙ ПРОМПТ (STRICT INSTRUCTIONS) ---
-    const systemInstruction = `
-### ROLE ###
-${identity}
-${profanityInstr}
+    const systemPrompt = `
+Role: ${config.botName || 'Helix'}. 
+Persona: ${config.aiPersonality}. 
+Language: Russian.
 
-### LANGUAGE & FORMATTING ###
-- Language: PERFECT RUSSIAN (Русский). No grammatical errors.
-- Formatting: Используй красивые абзацы. Делай отступы. Используй жирный шрифт для акцентов.
-- ${lengthInstr}
+${strictInstructions}
 
-### KNOWLEDGE BASE (CONTEXT) ###
+${profanityRule}
+
+[KNOWLEDGE BASE]:
 ${knowledgeBaseContext}
-
-### PROTOCOL (CRITICAL RULES) ###
-Ты должен сначала классифицировать запрос пользователя:
-
-1. **ТИП А: ОБЩЕНИЕ (Small Talk)** 
-   (Примеры: "Привет", "Как дела?", "Расскажи шутку", "Кто ты?")
-   -> ДЕЙСТВИЕ: Отвечай свободно, используя свою Личность (${config.aiPersonality}).
-
-2. **ТИП Б: ЗАПРОС ИНФОРМАЦИИ (Data Query)**
-   (Примеры: "Какие статы у брони?", "Где фармить руны?", "Как победить босса?", "Дроп рейт")
-   -> ДЕЙСТВИЕ: СТРОГО ПРОВЕРЬ РАЗДЕЛ [KNOWLEDGE BASE] ВЫШЕ.
-   - ЕСЛИ ИНФОРМАЦИЯ ЕСТЬ: Ответь, используя данные.
-   - ЕСЛИ ИНФОРМАЦИИ НЕТ: Ты ОБЯЗАН ответить "Я не знаю", "У меня нет такой инфы" или "В базе пусто" (в стиле своего персонажа).
-   - ЗАПРЕТ: НЕ ВЫДУМЫВАЙ ФАКТЫ. НЕ ГАЛЛЮЦИНИРУЙ. Если данных нет в тексте выше — не придумывай их.
 `;
 
     try {
@@ -131,17 +89,15 @@ ${knowledgeBaseContext}
             body: JSON.stringify({
                 model: config.aiModel || "llama-3.3-70b-versatile",
                 messages: [
-                    { role: "system", content: systemInstruction },
+                    { role: "system", content: systemPrompt },
                     { role: "user", content: question }
                 ],
-                temperature: config.aiTemperature || 0.4, 
-                max_tokens: maxTokens,
+                temperature: strictness >= 90 ? 0.1 : 0.4, 
+                max_tokens: 800,
             })
         });
 
         if (response.status === 429) {
-            if (config.aiPersonality === 'gopnik') return "Э, тормози! Я перегрелся. Дай перекурить.";
-            if (config.aiPersonality === 'official') return "Превышен лимит запросов. Пожалуйста, ожидайте.";
             return "Слишком много запросов. Дайте мне передохнуть минуту.";
         }
 
