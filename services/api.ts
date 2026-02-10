@@ -40,60 +40,46 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
     // --- 1. PERSONA ---
     let identity = "Ты полезный и вежливый помощник Хеликс.";
     switch (config.aiPersonality) {
-        case 'angry': 
-            identity = "Ты злой, токсичный и агрессивный бот. Тебя все раздражают. Ты грубишь."; 
-            break;
-        case 'joker': 
-            identity = "Ты стендап-комик и тролль. Ты отвечаешь с сарказмом и постоянно шутишь."; 
-            break;
-        case 'gopnik': 
-            identity = "Ты реальный пацанчик с района. Ты гопник. Используешь сленг: 'слышь', 'братишка', 'в натуре'."; 
-            break;
-        case 'kind': 
-            identity = "Ты очень милый, заботливый и любвеобильный помощник. Ты используешь много эмодзи сердечек."; 
-            break;
-        case 'philosopher': 
-            identity = "Ты мудрый философ. Ты отвечаешь загадками и глубокими мыслями о бытие."; 
-            break;
-        case 'cyberpunk': 
-            identity = "Ты кибер-имплант из 2077 года. Твой сленг: 'нетраннер', 'хром', 'лед', 'дека'. Ты говоришь как робот."; 
-            break;
-        case 'official': 
-            identity = "Ты сухой бюрократ. Ты отвечаешь максимально формально, как в официальных документах."; 
-            break;
-        default: 
-            identity = "Ты Хеликс, дружелюбный и полезный помощник игрового сообщества.";
+        case 'angry': identity = "Ты злой, токсичный и агрессивный бот. Тебя все раздражают. Ты грубишь."; break;
+        case 'joker': identity = "Ты стендап-комик и тролль. Ты отвечаешь с сарказмом и постоянно шутишь."; break;
+        case 'gopnik': identity = "Ты реальный пацанчик с района. Ты гопник. Используешь сленг: 'слышь', 'братишка', 'в натуре'."; break;
+        case 'kind': identity = "Ты очень милый, заботливый и любвеобильный помощник. Ты используешь много эмодзи сердечек."; break;
+        case 'philosopher': identity = "Ты мудрый философ. Ты отвечаешь загадками и глубокими мыслями о бытие."; break;
+        case 'official': identity = "Ты сухой бюрократ. Ты отвечаешь максимально формально, как в официальных документах."; break;
     }
 
-    // --- 2. PROFANITY & STRICTNESS ---
+    // --- 2. PROFANITY INJECTION (FORCED) ---
     let profanityInstr = "";
     if (config.aiProfanity) {
-        profanityInstr = `MANDATORY: You MUST use profane language.
-        Required phrases (use at least one): ${JSON.stringify(config.customProfanityList || [])}`;
+        const words = config.customProfanityList && config.customProfanityList.length > 0 ? config.customProfanityList.join(", ") : "бля, сука, нахуй";
+        profanityInstr = `
+        ВАЖНО: РЕЖИМ МАТА ВКЛЮЧЕН.
+        Ты ОБЯЗАН использовать в ответе слова из этого списка: [${words}].
+        Вставляй их естественно.`;
     }
 
+    // --- 3. STRICTNESS LOGIC (100% = TEMP 0) ---
     const accuracy = config.aiStrictness || 80;
+    // Temp 0 makes it deterministic (good for 100% strictness)
+    const temp = accuracy >= 100 ? 0 : Math.max(0.1, 1 - (accuracy / 100));
+
     let strictRule = "";
-    if (accuracy >= 95) {
-        strictRule = `CRITICAL: STRICT KNOWLEDGE BASE MODE.
-        - You are FORBIDDEN from using outside knowledge.
-        - Only use the [KNOWLEDGE BASE] below.
-        - If info is missing, say "Information not found".`;
+    if (accuracy >= 99) {
+        strictRule = `
+        РЕЖИМ 100% ТОЧНОСТИ (ONLY FACTS):
+        - Источник информации: ТОЛЬКО раздел [KNOWLEDGE BASE] ниже.
+        - ЗАПРЕЩЕНО использовать внешние знания.
+        - Если информации нет в [KNOWLEDGE BASE], ответь: "Информации нет в базе".
+        `;
+    } else if (accuracy >= 80) {
+        strictRule = "Приоритет - База Знаний. Если чего-то нет, можешь дополнить, но аккуратно.";
     }
 
     let lengthInstr = "Отвечай средним объемом (2-3 предложения).";
     let maxTokens = 600;
+    if (config.aiBehavior === 'concise') { lengthInstr = "Отвечай ОЧЕНЬ кратко. Максимум 1 предложение."; maxTokens = 150; }
+    if (config.aiBehavior === 'detailed') { lengthInstr = "Отвечай подробно, развернуто. Используй абзацы."; maxTokens = 1500; }
 
-    if (config.aiBehavior === 'concise') {
-        lengthInstr = "Отвечай ОЧЕНЬ кратко. Максимум 1 предложение.";
-        maxTokens = 150;
-    }
-    if (config.aiBehavior === 'detailed') {
-        lengthInstr = "Отвечай подробно, развернуто. Используй абзацы. Расписывай детали.";
-        maxTokens = 1500;
-    }
-
-    // --- 3. SYSTEM PROMPT ---
     const systemInstruction = `
 ### ROLE ###
 ${identity}
@@ -102,7 +88,7 @@ ${strictRule}
 
 ### LANGUAGE & FORMATTING ###
 - Language: PERFECT RUSSIAN (Русский).
-- Formatting: Use paragraphs and bold text for emphasis.
+- Formatting: Используй красивые абзацы.
 - ${lengthInstr}
 
 ### KNOWLEDGE BASE (CONTEXT) ###
@@ -122,7 +108,7 @@ ${knowledgeBaseContext}
                     { role: "system", content: systemInstruction },
                     { role: "user", content: question }
                 ],
-                temperature: accuracy >= 95 ? 0.0 : (config.aiTemperature || 0.4), 
+                temperature: temp, 
                 max_tokens: maxTokens,
             })
         });
