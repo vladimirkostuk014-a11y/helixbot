@@ -39,8 +39,7 @@ const App = () => {
     const [activeTab, setActiveTab] = useState('dashboard');
     const [isBotActive, setIsBotActive] = useState(true); 
     const [lastHeartbeat, setLastHeartbeat] = useState(0);
-    const [loadedSections, setLoadedSections] = useState<Set<string>>(new Set());
-    const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Mobile sidebar state
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     
     // Config
     const [config, setConfig] = useState<BotConfig>({
@@ -63,7 +62,7 @@ const App = () => {
         customProfanityList: [],
         aiTemperature: 0.3,
         aiMaxTokens: 1000,
-        aiStrictness: 80, // Default High Accuracy
+        aiStrictness: 80, 
         bannedWords: '' 
     });
     
@@ -85,9 +84,6 @@ const App = () => {
     const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeItem[]>([]);
     const [commands, setCommands] = useState<Command[]>([]);
     const [aiStats, setAiStats] = useState<AiStats>({ total: 0, history: [] }); 
-
-    const markLoaded = (section: string) => setLoadedSections(prev => new Set(prev).add(section));
-    const canSave = (section: string) => loadedSections.has(section);
 
     // Auth Check on Mount
     useEffect(() => {
@@ -123,22 +119,38 @@ const App = () => {
             if (unsub) unsubs.push(unsub);
         };
 
-        sub('config', (val) => { if (val) setConfig(prev => ({ ...prev, ...val })); markLoaded('config'); });
+        sub('config', (val) => { if (val) setConfig(prev => ({ ...prev, ...val })); });
         sub('status/heartbeat', (val) => { if (val) setLastHeartbeat(val); });
         sub('status/active', (val) => { setIsBotActive(val !== false); });
+        
+        // Critical Fix: Ensure Users is always a Record<string, User>, never an array
         sub('users', (val) => { 
             if (val) { 
-                const s = {...val}; 
-                Object.values(s).forEach((u: any) => { if(!u.history) u.history = []; else u.history = toArray(u.history); }); 
-                setUsers(s); 
-            } else setUsers({}); 
-            markLoaded('users'); 
+                const normalizedUsers: Record<string, UserType> = {};
+                // Handle both Array and Object responses from Firebase
+                const rawUsers = Array.isArray(val) ? val : Object.values(val);
+                
+                rawUsers.forEach((u: any) => {
+                    if (u && u.id) {
+                        // Ensure history is array
+                        if(!u.history) u.history = []; 
+                        else u.history = toArray(u.history);
+                        
+                        // Use string ID as key
+                        normalizedUsers[String(u.id)] = u;
+                    }
+                });
+                setUsers(normalizedUsers); 
+            } else {
+                setUsers({}); 
+            }
         });
-        sub('groups', (val) => { setGroups(val || {}); markLoaded('groups'); }); 
-        sub('knowledgeBase', (val) => { setKnowledgeBase(toArray(val)); markLoaded('knowledgeBase'); });
-        sub('commands', (val) => { setCommands(toArray(val)); markLoaded('commands'); });
-        sub('quickReplies', (val) => { setQuickReplies(toArray(val)); markLoaded('quickReplies'); });
-        sub('auditLogs', (val) => { setAuditLogs(toArray(val)); markLoaded('auditLogs'); });
+
+        sub('groups', (val) => { setGroups(val || {}); }); 
+        sub('knowledgeBase', (val) => { setKnowledgeBase(toArray(val)); });
+        sub('commands', (val) => { setCommands(toArray(val)); });
+        sub('quickReplies', (val) => { setQuickReplies(toArray(val)); });
+        sub('auditLogs', (val) => { setAuditLogs(toArray(val)); });
         
         sub('aiStats', (val) => { 
             if (val) { 
@@ -150,31 +162,25 @@ const App = () => {
             } else {
                 setAiStats({total: 0, history: []});
             }
-            markLoaded('aiStats'); 
         });
         
-        sub('categories', (val) => { if(val) setCategories(toArray(val)); markLoaded('categories'); });
-        sub('topicNames', (val) => { if(val) setTopicNames(val); markLoaded('topicNames'); });
-        sub('topicUnreads', (val) => { if(val) setTopicUnreads(val); else setTopicUnreads({}); markLoaded('topicUnreads'); });
-        sub('disabledAiTopics', (val) => { if(val) setDisabledAiTopics(toArray(val)); else setDisabledAiTopics([]); markLoaded('disabledAiTopics'); });
-        sub('topicHistory', (val) => { if(val) { const cleanHistory: Record<string, any[]> = {}; Object.entries(val).forEach(([k, v]) => { cleanHistory[k] = toArray(v); }); setTopicHistory(cleanHistory); } else setTopicHistory({}); markLoaded('topicHistory'); });
-        sub('calendarEvents', (val) => { setCalendarEvents(toArray(val)); markLoaded('calendarEvents'); });
-        sub('calendarCategories', (val) => { if(val) setCalendarCategories(toArray(val)); markLoaded('calendarCategories'); });
+        sub('categories', (val) => { if(val) setCategories(toArray(val)); });
+        sub('topicNames', (val) => { if(val) setTopicNames(val); });
+        sub('topicUnreads', (val) => { if(val) setTopicUnreads(val); else setTopicUnreads({}); });
+        sub('disabledAiTopics', (val) => { if(val) setDisabledAiTopics(toArray(val)); else setDisabledAiTopics([]); });
+        sub('topicHistory', (val) => { 
+            if(val) { 
+                const cleanHistory: Record<string, any[]> = {}; 
+                Object.entries(val).forEach(([k, v]) => { cleanHistory[k] = toArray(v); }); 
+                setTopicHistory(cleanHistory); 
+            } else setTopicHistory({}); 
+        });
+        sub('calendarEvents', (val) => { setCalendarEvents(toArray(val)); });
+        sub('calendarCategories', (val) => { if(val) setCalendarCategories(toArray(val)); });
 
         return () => unsubs.forEach(fn => fn && fn());
     }, [isAuthenticated]);
 
-    // --- AUTO-SAVE ---
-    useEffect(() => { if (canSave('config')) saveData('config', config); }, [config, loadedSections]);
-    useEffect(() => { if (canSave('users')) saveData('users', users); }, [users, loadedSections]);
-    useEffect(() => { if (canSave('groups')) saveData('groups', groups); }, [groups, loadedSections]);
-    useEffect(() => { if (canSave('knowledgeBase')) saveData('knowledgeBase', knowledgeBase); }, [knowledgeBase, loadedSections]);
-    useEffect(() => { if (canSave('commands')) saveData('commands', commands); }, [commands, loadedSections]);
-    useEffect(() => { if (canSave('categories')) saveData('categories', categories); }, [categories, loadedSections]);
-    useEffect(() => { if (canSave('topicNames')) saveData('topicNames', topicNames); }, [topicNames, loadedSections]);
-    useEffect(() => { if (canSave('disabledAiTopics')) saveData('disabledAiTopics', disabledAiTopics); }, [disabledAiTopics, loadedSections]);
-    useEffect(() => { if (canSave('quickReplies')) saveData('quickReplies', quickReplies); }, [quickReplies, loadedSections]);
-    
     // --- ACTIONS ---
     const toggleBotStatus = () => {
         const newState = !isBotActive;
@@ -211,7 +217,7 @@ const App = () => {
     const handleCalendarUpdate = (action: React.SetStateAction<CalendarEvent[]>) => {
         setCalendarEvents(prev => {
             const newValue = typeof action === 'function' ? action(prev) : action;
-            setTimeout(() => saveData('calendarEvents', newValue), 0);
+            saveData('calendarEvents', newValue); // Explicit save
             return newValue;
         });
     };
@@ -221,7 +227,7 @@ const App = () => {
         const newGroups = { ...groups };
         delete newGroups[groupId];
         setGroups(newGroups);
-        saveData('groups', newGroups);
+        saveData('groups', newGroups); // Explicit save
         addLog('Группы', `Группа ${groupId} удалена`, 'danger');
     };
 
@@ -233,17 +239,14 @@ const App = () => {
         topicMsgs.forEach(msg => {
             if (msg.userId && msg.isIncoming) userIdsInTopic.add(msg.userId);
         });
-        const updatedUsers = { ...users };
-        let hasChanges = false;
+        
+        // We only save specific user updates to avoid full rewrite issues
         userIdsInTopic.forEach(uid => {
-            const user = updatedUsers[uid];
-            if (user && user.unreadCount && user.unreadCount > 0) {
-                updatedUsers[uid] = { ...user, unreadCount: 0 };
+            const u = users[String(uid)];
+            if (u && u.unreadCount && u.unreadCount > 0) {
                 saveData(`users/${uid}/unreadCount`, 0);
-                hasChanges = true;
             }
         });
-        if (hasChanges) setUsers(updatedUsers);
     };
 
     const handleLiveChatSend = async (data: { text: string; mediaUrl?: string; mediaFile?: File | null; buttons?: any[]; topicId: string }) => {
@@ -279,6 +282,7 @@ const App = () => {
                     message_thread_id: threadId
                 }, config);
             }
+            // Optimistic update
             const newMsg = {
                 dir: 'out',
                 text: text,
@@ -382,7 +386,7 @@ const App = () => {
                         </div>
                         <div>
                             <h1 className="text-xl font-bold text-white tracking-tight">Бот Helix</h1>
-                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v9.8</span>
+                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">Админ Панель v10.2</span>
                         </div>
                     </div>
                 </div>
