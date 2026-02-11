@@ -33,8 +33,10 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     const [showAiModal, setShowAiModal] = useState(false);
     const [aiModalTab, setAiModalTab] = useState<'history' | 'top'>('history');
     
-    // Settings Auth
-    const [isSettingsUnlocked, setIsSettingsUnlocked] = useState(false);
+    // Settings Auth - PERSISTENT STATE FIX
+    const [isSettingsUnlocked, setIsSettingsUnlocked] = useState(() => {
+        return sessionStorage.getItem('helix_settings_unlocked') === 'true';
+    });
     const [settingsPass, setSettingsPass] = useState('');
     const [settingsError, setSettingsError] = useState(false);
 
@@ -64,11 +66,17 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         try {
             if (btoa(settingsPass) === SETTINGS_HASH) {
                 setIsSettingsUnlocked(true);
+                sessionStorage.setItem('helix_settings_unlocked', 'true'); // Persist unlock
                 setSettingsError(false);
             } else {
                 setSettingsError(true);
             }
         } catch { setSettingsError(true); }
+    };
+    
+    const handleLockSettings = () => {
+        setIsSettingsUnlocked(false);
+        sessionStorage.removeItem('helix_settings_unlocked');
     };
 
     const getTopQuestions = () => {
@@ -131,8 +139,9 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
             const currentList = Array.isArray(config.customProfanityList) ? config.customProfanityList : [];
             if (!currentList.includes(newProfanityWord.trim())) {
                 const newList = [...currentList, newProfanityWord.trim()];
-                setConfig({ ...config, customProfanityList: newList });
-                saveData('config/customProfanityList', newList); 
+                const newConfig = { ...config, customProfanityList: newList };
+                setConfig(newConfig);
+                saveData('config', newConfig); 
             }
             setNewProfanityWord('');
         }
@@ -141,8 +150,9 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     const handleRemoveProfanity = (word: string) => {
         const currentList = Array.isArray(config.customProfanityList) ? config.customProfanityList : [];
         const newList = currentList.filter(w => w !== word);
-        setConfig({ ...config, customProfanityList: newList });
-        saveData('config/customProfanityList', newList); 
+        const newConfig = { ...config, customProfanityList: newList };
+        setConfig(newConfig);
+        saveData('config', newConfig); 
     };
 
     const getActivityData = () => {
@@ -238,10 +248,10 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                         <h2 className="text-xl font-bold text-white flex items-center gap-2">
                             <Icons.Sparkles className="text-purple-500"/> Настройки Хеликса (AI)
                         </h2>
+                        <button onClick={handleLockSettings} className="text-xs text-gray-500 hover:text-white">Закрыть доступ</button>
                     </div>
                     
                     <div className="space-y-6 relative z-10 flex-1 overflow-y-auto custom-scrollbar pr-2 pb-20">
-                        {/* Settings controls omitted for brevity as they are unchanged */}
                         <div>
                             <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Модель AI (Ядро)</label>
                             <select value={config.aiModel || 'llama-3.3-70b-versatile'} onChange={e => setConfig({...config, aiModel: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">

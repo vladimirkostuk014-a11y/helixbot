@@ -2,6 +2,7 @@
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, onValue, set, update as firebaseUpdate, get, remove } from "firebase/database";
 import fetch from 'node-fetch';
+import { FormData } from 'formdata-node';
 
 // ==========================================
 // 1. КОНФИГУРАЦИЯ FIREBASE
@@ -48,6 +49,7 @@ const sync = (path, key, isArray = false) => {
 
 sync('config', 'config');
 sync('users', 'users');
+sync('groups', 'groups');
 sync('commands', 'commands', true);
 sync('knowledgeBase', 'knowledgeBase', true);
 sync('topicNames', 'topicNames');
@@ -55,25 +57,85 @@ sync('aiStats', 'aiStats');
 sync('disabledAiTopics', 'disabledAiTopics', true);
 onValue(ref(db, 'status/active'), (s) => state.isBotActive = s.val() !== false);
 
-// --- HEARTBEAT (FIX OFFLINE STATUS) ---
+// --- HEARTBEAT ---
 setInterval(() => {
-    // Updates timestamp every 10s so frontend knows bot is alive
     firebaseUpdate(ref(db, 'status'), { heartbeat: Date.now() });
 }, 10000);
 
 // ==========================================
-// 3. API TELEGRAM
+// 3. API TELEGRAM (FIXED FOR MEDIA)
 // ==========================================
 const apiCall = async (method, body) => {
     if (!state.config.token) return;
+    
     try {
-        const res = await fetch(`https://api.telegram.org/bot${state.config.token}/${method}`, {
+        let options = {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
+            timeout: 30000
+        };
+
+        // Проверяем наличие медиа в формате Base64 (начинается с data:)
+        const mediaField = body.photo ? 'photo' : (body.video ? 'video' : null);
+        const hasBase64 = mediaField && typeof body[mediaField] === 'string' && body[mediaField].startsWith('data:');
+
+        if (hasBase64) {
+            const form = new FormData();
+            
+            // Конвертируем Base64 в Buffer
+            const base64Data = body[mediaField].split(',')[1];
+            const mimeMatch = body[mediaField].match(/:(.*?);/);
+            const mime = mimeMatch ? mimeMatch[1] : (mediaField === 'video' ? 'video/mp4' : 'image/jpeg');
+            const buffer = Buffer.from(base64Data, 'base64');
+            const filename = `file.${mime.split('/')[1]}`;
+            
+            form.append(mediaField, buffer, filename);
+            
+            // Добавляем остальные поля
+            Object.keys(body).forEach(key => {
+                if (key !== mediaField && body[key] !== undefined) {
+                    const val = typeof body[key] === 'object' ? JSON.stringify(body[key]) : body[key];
+                    form.append(key, val);
+                }
+            });
+            
+            options.body = form;
+            // Headers для FormData ставятся автоматически node-fetch/formdata-node
+        } else {
+            options.headers = { 'Content-Type': 'application/json' };
+            options.body = JSON.stringify(body);
+        }
+
+        const res = await fetch(`https://api.telegram.org/bot${state.config.token}/${method}`, options);
         return await res.json();
-    } catch (e) { return { ok: false }; }
+    } catch (e) { 
+        console.error(`API Error (${method}):`, e.message);
+        return { ok: false, description: e.message }; 
+    }
+};
+
+// --- HELPER: LOG BOT RESPONSE TO DB ---
+const logBotMessage = async (userId, text, type = 'text') => {
+    if (!userId) return;
+    try {
+        const userRef = ref(db, `users/${userId}`);
+        const snap = await get(userRef);
+        if (snap.exists()) {
+            const d = snap.val();
+            const newMsg = {
+                dir: 'out',
+                text: text,
+                type: type,
+                time: new Date().toLocaleTimeString('ru-RU'),
+                timestamp: Date.now(),
+                isIncoming: false,
+                isGroup: false, 
+                user: state.config.botName || 'Bot'
+            };
+            const history = d.history ? Object.values(d.history) : [];
+            const updatedHistory = [...history, newMsg].slice(-50);
+            await firebaseUpdate(userRef, { history: updatedHistory });
+        }
+    } catch (e) { console.error("Log bot msg error", e); }
 };
 
 // ==========================================
@@ -81,17 +143,20 @@ const apiCall = async (method, body) => {
 // ==========================================
 setInterval(async () => {
     const now = new Date();
+    // MSK is UTC+3
     const mskHours = (now.getUTCHours() + 3) % 24;
     
+    // Проверка на 00:00
     if (mskHours === 0 && now.getMinutes() === 0) {
         if (!dailyTopSent && state.config.enableAutoTop) {
+            console.log("[Scheduler] Triggering Daily Top at 00:00 MSK");
             await sendDailyTop();
             dailyTopSent = true;
         }
     } else {
         dailyTopSent = false;
     }
-}, 30000);
+}, 30000); // Check every 30s
 
 const sendDailyTop = async () => {
     if (!state.config.targetChatId) return;
@@ -101,87 +166,60 @@ const sendDailyTop = async () => {
         .sort((a, b) => b.dailyMsgCount - a.dailyMsgCount)
         .slice(0, 10);
 
+    const topCommand = state.commands.find(c => c.trigger === '_daily_top_');
+    
+    // Если никого не было и команды нет - выходим. Если команда есть - можем отправить пустой топ.
+    if (!topCommand && sortedUsers.length === 0) return;
+
+    let listStr = "";
     if (sortedUsers.length > 0) {
-        const topCommand = state.commands.find(c => c.trigger === '_daily_top_');
-        let title = topCommand ? topCommand.response : "🏆 <b>Топ активных участников за день:</b>";
-        
-        let msg = `${title}\n\n`;
         sortedUsers.forEach((u, index) => {
             const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
-            msg += `${medal} <b>${u.name}</b>: ${u.dailyMsgCount} сбщ.\n`;
+            listStr += `${medal} <b>${u.name}</b>: ${u.dailyMsgCount} сбщ.\n`;
         });
-
-        await apiCall('sendMessage', {
-            chat_id: state.config.targetChatId,
-            text: msg,
-            parse_mode: 'HTML',
-            message_thread_id: topCommand?.notificationTopicId && topCommand.notificationTopicId !== 'general' ? topCommand.notificationTopicId : undefined
-        });
+    } else {
+        listStr = "Сегодня никто не писал 😔";
     }
 
+    // Если есть команда, используем её шаблон. Иначе дефолт.
+    let resp = topCommand ? topCommand.response : "🏆 <b>Топ активных участников за день:</b>\n\n{top_list}";
+    // Заменяем плейсхолдер {top_list}
+    resp = resp.replace(/{top_list}/g, listStr);
+
+    const kb = topCommand?.buttons?.length > 0 ? { inline_keyboard: topCommand.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
+    const tid = topCommand?.notificationTopicId && topCommand.notificationTopicId !== 'general' ? topCommand.notificationTopicId : undefined;
+
+    if (topCommand?.mediaUrl) {
+        await apiCall('sendPhoto', { chat_id: state.config.targetChatId, photo: topCommand.mediaUrl, caption: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: tid });
+    } else {
+        await apiCall('sendMessage', { chat_id: state.config.targetChatId, text: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: tid });
+    }
+
+    // Сброс счетчиков
     for (const uid of Object.keys(state.users)) {
         await firebaseUpdate(ref(db, `users/${uid}`), { dailyMsgCount: 0 });
     }
-    console.log('[Scheduler] Daily Top sent and counters reset.');
 };
 
 // ==========================================
-// 5. AI LOGIC (STRICT)
+// 5. AI LOGIC
 // ==========================================
 const getAIResponse = async (question, userName) => {
     const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiStrictness, customProfanityList } = state.config;
     if (!openaiApiKey) return "⚠️ Ключ AI не найден.";
 
     const kbContent = state.knowledgeBase.length > 0 
-        ? state.knowledgeBase.map(k => `[TITLE: ${k.title} (Cat: ${k.category})]\n${k.response}`).join('\n\n')
+        ? state.knowledgeBase.map(k => `[TITLE: ${k.title}]\n${k.response}`).join('\n\n')
         : "База знаний пуста.";
 
-    const strictness = aiStrictness || 80;
+    let instructions = `Role: ${state.config.botName || 'Helix'}. Personality: ${aiPersonality}. Language: Russian. `;
     
-    // Logic: 
-    // If strictness >= 90: It MUST rely on context for data.
-    // If strictness == 100: It ONLY answers from context, no small talk.
-    
-    let strictInstructions = "";
-    
-    if (strictness >= 90) {
-        strictInstructions = `
-CRITICAL INSTRUCTION (STRICTNESS LEVEL ${strictness}%):
-1. You are a DATABASE ASSISTANT. You are NOT a creative writer.
-2. CHECK [KNOWLEDGE BASE] BELOW FIRST.
-3. IF the user asks about Game Data (Armor, Weapons, Drop Rates, Bosses, Mechanics):
-   - You MUST find the exact answer in [KNOWLEDGE BASE].
-   - IF NOT FOUND IN [KNOWLEDGE BASE]: You MUST say "Этой информации нет в моей базе знаний." OR "Я не знаю этого."
-   - DO NOT USE OUTSIDE INTERNET KNOWLEDGE. DO NOT HALLUCINATE.
-4. IF the user asks Small Talk (Hello, How are you):
-   - IF STRICTNESS = 100: IGNORE or say "Я отвечаю только на вопросы по базе."
-   - IF STRICTNESS < 100: Chat normally using your Persona (${aiPersonality}).
-`;
-    } else {
-        strictInstructions = `
-INSTRUCTION:
-- Priority Source: [KNOWLEDGE BASE].
-- If not found, you may use general knowledge, but warn the user.
-`;
+    if (aiProfanity) {
+        instructions += `\nMODE: TOXIC/PROFANITY. 
+        - Используй грубый русский мат. 
+        - Словарь: ${JSON.stringify(customProfanityList || [])}. 
+        - Не извиняйся.`;
     }
-
-    let profanityRule = "";
-    if (aiProfanity && customProfanityList && customProfanityList.length > 0) {
-        profanityRule = `USE THESE WORDS IN YOUR REPLY: ${JSON.stringify(customProfanityList)}.`;
-    }
-
-    const systemPrompt = `
-Role: ${state.config.botName || 'Helix'}. 
-Persona: ${aiPersonality}. 
-Language: Russian.
-
-${strictInstructions}
-
-${profanityRule}
-
-[KNOWLEDGE BASE]:
-${kbContent}
-`;
 
     try {
         const res = await fetch(`${aiBaseUrl || 'https://api.groq.com/openai/v1'}/chat/completions`, {
@@ -189,206 +227,205 @@ ${kbContent}
             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${openaiApiKey}` },
             body: JSON.stringify({
                 model: aiModel || "llama-3.3-70b-versatile",
-                messages: [{ role: "system", content: systemPrompt }, { role: "user", content: question }],
-                temperature: strictness >= 90 ? 0.1 : 0.5, // Low temp for high strictness
+                messages: [{ role: "system", content: instructions + "\n\nDATABASE:\n" + kbContent }, { role: "user", content: question }],
+                temperature: aiProfanity ? 0.9 : 0.5,
                 max_tokens: 800
             })
         });
         const data = await res.json();
-        return data.choices?.[0]?.message?.content || "Ошибка ядра AI.";
-    } catch (e) { return "Ошибка сети AI."; }
+        return data.choices?.[0]?.message?.content || "AI Error.";
+    } catch (e) { return "Net Error."; }
 };
 
 // ==========================================
 // 6. PROCESS UPDATES
 // ==========================================
 const processUpdate = async (upd) => {
-    const m = upd.message;
-    if (!m) return;
+    try {
+        const m = upd.message;
+        if (!m) return;
 
-    const cid = String(m.chat.id);
-    const user = m.from;
-    const threadId = m.message_thread_id ? String(m.message_thread_id) : 'general';
-    const isPrivate = m.chat.type === 'private';
+        const cid = String(m.chat.id);
+        const user = m.from;
+        const threadId = m.message_thread_id ? String(m.message_thread_id) : 'general';
+        const isPrivate = m.chat.type === 'private';
 
-    if (m.left_chat_member && !m.left_chat_member.is_bot) {
-        await remove(ref(db, `users/${m.left_chat_member.id}`));
-        return; 
-    }
+        // --- GROUP LOGIC ---
+        if (!isPrivate) {
+            const correctId = String(m.chat.id);
+            if (!state.groups[correctId]) {
+                 await set(ref(db, `groups/${correctId}`), { id: m.chat.id, title: m.chat.title, isDisabled: false, lastActive: new Date().toLocaleDateString() });
+            }
+            if (state.groups[correctId]?.isDisabled) return;
+        }
 
-    let dbUserRole = 'user'; // Default
-
-    // --- CAPTURE USER & GET ROLE ---
-    if (user && !user.is_bot) {
-        const userRef = ref(db, `users/${user.id}`);
-        const snapshot = await get(userRef);
-        
-        if (!snapshot.exists()) {
-            await set(userRef, {
-                id: user.id,
-                name: user.first_name,
-                username: user.username || '',
-                status: 'active',
-                role: 'user',
-                joinDate: new Date().toLocaleDateString('ru-RU'),
-                lastSeen: new Date().toLocaleTimeString('ru-RU'),
-                msgCount: 1,
-                dailyMsgCount: 1,
-                warnings: 0,
-                history: []
-            });
-        } else {
-            const d = snapshot.val();
-            dbUserRole = d.role || 'user'; // Get actual role from DB
+        // --- USER TRACKING ---
+        let dbUserRole = 'user';
+        if (user && !user.is_bot) {
+            const uid = String(user.id);
+            const local = state.users[uid];
+            dbUserRole = local?.role || 'user';
             
             const updates = {
                 name: user.first_name,
                 username: user.username || '',
                 lastSeen: new Date().toLocaleTimeString('ru-RU'),
-                msgCount: (d.msgCount || 0) + 1,
-                dailyMsgCount: (d.dailyMsgCount || 0) + 1
+                msgCount: (local?.msgCount || 0) + 1,
+                dailyMsgCount: (local?.dailyMsgCount || 0) + 1
             };
-            
-            if (isPrivate && m.text) {
-                const newMsg = {
-                    dir: 'in',
-                    text: m.text,
-                    type: 'text',
-                    time: new Date().toLocaleTimeString('ru-RU'),
-                    timestamp: Date.now(),
-                    isIncoming: true,
-                    isGroup: false,
-                    user: user.first_name
-                };
-                const history = d.history ? Object.values(d.history) : [];
-                updates.history = [...history, newMsg].slice(-50);
-                updates.unreadCount = (d.unreadCount || 0) + 1;
+            if (!local) {
+                updates.id = user.id;
+                updates.role = 'user';
+                updates.status = 'active';
+                updates.joinDate = new Date().toLocaleDateString();
+                await set(ref(db, `users/${uid}`), updates);
+            } else {
+                await firebaseUpdate(ref(db, `users/${uid}`), updates);
             }
-            await firebaseUpdate(userRef, updates);
         }
-    }
 
-    // --- WELCOME ---
-    if (m.new_chat_members) {
-        for (const member of m.new_chat_members) {
-            if (member.is_bot) continue;
-            await set(ref(db, `users/${member.id}`), {
-                id: member.id,
-                name: member.first_name,
-                username: member.username || '',
-                status: 'active',
-                role: 'user',
-                joinDate: new Date().toLocaleDateString('ru-RU'),
-                lastSeen: new Date().toLocaleTimeString('ru-RU'),
-                msgCount: 0,
-                dailyMsgCount: 0,
-                warnings: 0,
-                history: []
-            });
+        // --- WELCOME MESSAGE ---
+        if (m.new_chat_members) {
             const welcome = state.commands.find(c => c.trigger === '_welcome_');
             if (welcome) {
-                const nameLink = `<a href="tg://user?id=${member.id}">${member.first_name}</a>`;
-                const text = welcome.response.replace(/{user}/g, nameLink).replace(/{name}/g, member.first_name);
-                const kb = welcome.buttons?.length > 0 ? { inline_keyboard: welcome.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
-                let targetThread = undefined;
-                if (welcome.notificationTopicId && welcome.notificationTopicId !== 'general') targetThread = welcome.notificationTopicId;
-                else if (threadId !== 'general') targetThread = threadId;
-
-                if (welcome.mediaUrl) await apiCall('sendPhoto', { chat_id: cid, photo: welcome.mediaUrl, caption: text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThread });
-                else await apiCall('sendMessage', { chat_id: cid, text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThread });
-            }
-        }
-    }
-
-    if (!m.text || user.is_bot || !state.isBotActive) return;
-
-    const txt = m.text.trim();
-    const lowerTxt = txt.toLowerCase();
-
-    // --- WARN (ADMIN ONLY) ---
-    if (lowerTxt.startsWith('/warn') && m.reply_to_message) {
-        // Double check admin rights for command issuer
-        if (dbUserRole !== 'admin') return; 
-
-        const target = m.reply_to_message.from;
-        const targetRef = ref(db, `users/${target.id}`);
-        const snap = await get(targetRef);
-        let val = snap.val() || { warnings: 0 };
-        const newWarns = (val.warnings || 0) + 1;
-        
-        await firebaseUpdate(targetRef, { warnings: newWarns, name: target.first_name });
-
-        if (newWarns >= 3) {
-            await apiCall('restrictChatMember', {
-                chat_id: cid,
-                user_id: target.id,
-                permissions: JSON.stringify({ can_send_messages: false }),
-                until_date: Math.floor(Date.now()/1000) + 172800 
-            });
-            await firebaseUpdate(targetRef, { warnings: 0, status: 'muted' });
-            await apiCall('sendMessage', { chat_id: cid, text: `🛑 <b>${target.first_name}</b> заглушен (3/3 варнов).`, parse_mode: 'HTML', message_thread_id: threadId });
-        } else {
-            await apiCall('sendMessage', { chat_id: cid, text: `⚠️ <b>${target.first_name}</b>, варн (${newWarns}/3).`, parse_mode: 'HTML', message_thread_id: threadId });
-        }
-        return;
-    }
-
-    // --- COMMANDS ---
-    for (const cmd of state.commands) {
-        let isMatch = false;
-        if (cmd.matchType === 'exact') isMatch = lowerTxt === cmd.trigger.toLowerCase();
-        else if (cmd.matchType === 'start') isMatch = lowerTxt.startsWith(cmd.trigger.toLowerCase());
-        else if (cmd.matchType === 'contains') isMatch = lowerTxt.includes(cmd.trigger.toLowerCase());
-
-        if (isMatch) {
-            // 1. SYSTEM COMMANDS -> ADMIN ONLY
-            if (cmd.isSystem && dbUserRole !== 'admin') {
-                return; // Ignore if user is not admin in DB
-            }
-
-            // 2. TOPIC RESTRICTION
-            if (cmd.allowedTopicId) {
-                if (cmd.allowedTopicId === 'private_only') {
-                    if (!isPrivate) continue; 
-                } else {
-                    const currentTid = threadId || 'general';
-                    // String comparison to be safe
-                    if (String(currentTid) !== String(cmd.allowedTopicId)) continue; 
+                for (const member of m.new_chat_members) {
+                    if (member.is_bot) continue;
+                    let text = welcome.response.replace(/{user}/g, `<a href="tg://user?id=${member.id}">${member.first_name}</a>`).replace(/{name}/g, member.first_name);
+                    const kb = welcome.buttons?.length > 0 ? { inline_keyboard: welcome.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
+                    
+                    if (welcome.mediaUrl) {
+                        await apiCall('sendPhoto', { chat_id: cid, photo: welcome.mediaUrl, caption: text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: threadId !== 'general' ? threadId : undefined });
+                    } else {
+                        await apiCall('sendMessage', { chat_id: cid, text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: threadId !== 'general' ? threadId : undefined });
+                    }
                 }
             }
+        }
 
-            const resp = cmd.response.replace(/{user}/g, `<a href="tg://user?id=${user.id}">${user.first_name}</a>`).replace(/{name}/g, user.first_name);
-            const kb = cmd.buttons?.length > 0 ? { inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
-            const targetTid = cmd.notificationTopicId ? (cmd.notificationTopicId === 'general' ? undefined : cmd.notificationTopicId) : (threadId !== 'general' ? threadId : undefined);
+        if (!m.text || user.is_bot || !state.isBotActive) return;
+        const txt = m.text.trim();
+        const lowerTxt = txt.toLowerCase();
 
-            if (cmd.mediaUrl) {
-                await apiCall('sendPhoto', { chat_id: cid, photo: cmd.mediaUrl, caption: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetTid });
-            } else {
-                await apiCall('sendMessage', { chat_id: cid, text: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetTid });
-            }
+        // --- UNWARN LOGIC (FIXED) ---
+        if (lowerTxt.startsWith('/unwarn') && m.reply_to_message && dbUserRole === 'admin') {
+            const target = m.reply_to_message.from;
+            const targetRef = ref(db, `users/${target.id}`);
+            const snap = await get(targetRef);
+            let val = snap.val() || { warnings: 0 };
+            
+            // Уменьшаем счетчик
+            const newWarns = Math.max(0, (val.warnings || 0) - 1);
+            await firebaseUpdate(targetRef, { warnings: newWarns });
+
+            // Ищем шаблон ответа для _unwarn_ или берем дефолтный
+            const cmd = state.commands.find(c => c.trigger === '_unwarn_');
+            let resp = cmd ? cmd.response : "🕊 <b>{target_name}</b>, предупреждение снято. Счет: {warns}/3.";
+            
+            // Заменяем переменные
+            resp = resp.replace(/{target_name}/g, target.first_name).replace(/{warns}/g, String(newWarns));
+
+            await apiCall('sendMessage', { 
+                chat_id: cid, 
+                text: resp, 
+                parse_mode: 'HTML', 
+                message_thread_id: threadId !== 'general' ? threadId : undefined 
+            });
             return;
         }
-    }
 
-    // --- AI ---
-    if (state.config.enableAI) {
-        const isHelixTrigger = lowerTxt.startsWith('хеликс') || lowerTxt.startsWith('helix');
-        const isPMAllowed = m.chat.type === 'private' && state.config.enablePM;
-        
-        if (m.chat.type === 'private' && !state.config.enablePM && !isHelixTrigger) return;
+        // --- WARN LOGIC ---
+        if (lowerTxt.startsWith('/warn') && m.reply_to_message && dbUserRole === 'admin') {
+            const target = m.reply_to_message.from;
+            const targetRef = ref(db, `users/${target.id}`);
+            const snap = await get(targetRef);
+            let val = snap.val() || { warnings: 0 };
+            
+            const newWarns = (val.warnings || 0) + 1;
+            await firebaseUpdate(targetRef, { warnings: newWarns });
 
-        if ((isHelixTrigger || isPMAllowed) && !state.disabledAiTopics.includes(threadId)) {
-            const q = txt.replace(/^(хеликс|helix)/i, '').trim();
-            if (!q) return;
-            const a = await getAIResponse(q, user.first_name);
-            await apiCall('sendMessage', { chat_id: cid, text: a, reply_to_message_id: m.message_id, message_thread_id: threadId !== 'general' ? threadId : undefined });
-            const h = state.aiStats.history || [];
-            await set(ref(db, 'aiStats'), { total: (state.aiStats.total || 0) + 1, history: [{ query: q, response: a, time: Date.now() }, ...h].slice(0, 100) });
+            const cmd = state.commands.find(c => c.trigger === '_warn_');
+            let resp = cmd ? cmd.response : "⚠️ <b>{target_name}</b>, вам выдано предупреждение. Счет: {warns}/3.";
+            resp = resp.replace(/{target_name}/g, target.first_name).replace(/{warns}/g, String(newWarns));
+
+            if (newWarns >= 3) {
+                await apiCall('restrictChatMember', { 
+                    chat_id: cid, 
+                    user_id: target.id, 
+                    permissions: JSON.stringify({ can_send_messages: false }), 
+                    until_date: Math.floor(Date.now()/1000) + 86400 
+                });
+                await firebaseUpdate(targetRef, { warnings: 0, status: 'muted' });
+                resp += "\n🛑 Пользователь заглушен на 24 часа.";
+            }
+
+            await apiCall('sendMessage', { 
+                chat_id: cid, 
+                text: resp, 
+                parse_mode: 'HTML', 
+                message_thread_id: threadId !== 'general' ? threadId : undefined 
+            });
+            return;
         }
-    }
+
+        // --- BAN/UNBAN LOGIC ---
+        if (lowerTxt.startsWith('/ban') && dbUserRole === 'admin' && m.reply_to_message) {
+             const target = m.reply_to_message.from;
+             await firebaseUpdate(ref(db, `users/${target.id}`), { status: 'banned' });
+             await apiCall('banChatMember', { chat_id: cid, user_id: target.id });
+             await apiCall('sendMessage', { chat_id: cid, text: `⛔️ <b>${target.first_name}</b> забанен.`, parse_mode: 'HTML' });
+             return;
+        }
+
+        // --- CUSTOM COMMANDS ---
+        for (const cmd of state.commands) {
+            let match = false;
+            if (cmd.matchType === 'exact') match = lowerTxt === cmd.trigger.toLowerCase();
+            else if (cmd.matchType === 'start') match = lowerTxt.startsWith(cmd.trigger.toLowerCase());
+            else if (cmd.matchType === 'contains') match = lowerTxt.includes(cmd.trigger.toLowerCase());
+
+            if (match) {
+                if (cmd.isSystem && dbUserRole !== 'admin') continue;
+                
+                // Permission Check
+                const hasRole = cmd.allowedRoles ? cmd.allowedRoles.includes(dbUserRole) : true;
+                if (!hasRole) continue;
+
+                // Topic Check
+                if (cmd.allowedTopicId && cmd.allowedTopicId !== 'private_only' && cmd.allowedTopicId !== String(threadId) && !isPrivate) continue;
+                if (cmd.allowedTopicId === 'private_only' && !isPrivate) continue;
+
+                let resp = cmd.response.replace(/{user}/g, user.first_name).replace(/{name}/g, user.first_name);
+                const kb = cmd.buttons?.length > 0 ? { inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
+                
+                // Используем message_thread_id только если это не general
+                const targetThread = threadId !== 'general' ? threadId : undefined;
+
+                if (cmd.mediaUrl) {
+                    await apiCall('sendPhoto', { chat_id: cid, photo: cmd.mediaUrl, caption: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThread });
+                } else {
+                    await apiCall('sendMessage', { chat_id: cid, text: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThread });
+                }
+                return;
+            }
+        }
+
+        // --- AI ---
+        if (state.config.enableAI) {
+            const isHelixTrigger = lowerTxt.startsWith('хеликс') || lowerTxt.startsWith('helix');
+            if (isPrivate || isHelixTrigger) {
+                const q = txt.replace(/^(хеликс|helix)/i, '').trim();
+                if (q) {
+                    const a = await getAIResponse(q, user.first_name);
+                    await apiCall('sendMessage', { chat_id: cid, text: a, reply_to_message_id: m.message_id, message_thread_id: threadId !== 'general' ? threadId : undefined });
+                }
+            }
+        }
+
+    } catch (e) { console.error("Process error:", e); }
 };
 
 const start = async () => {
+    console.log("Bot Server Started");
     while (true) {
         if (state.config.token) {
             try {
@@ -396,12 +433,8 @@ const start = async () => {
                 if (res?.ok && res.result.length > 0) {
                     for (const u of res.result) {
                         lastUpdateId = u.update_id;
-                        if (!processedUpdates.has(u.update_id)) {
-                            processedUpdates.add(u.update_id);
-                            await processUpdate(u);
-                        }
+                        await processUpdate(u);
                     }
-                    if (processedUpdates.size > 5000) processedUpdates.clear();
                 }
             } catch (e) { await new Promise(r => setTimeout(r, 5000)); }
         } else { await new Promise(r => setTimeout(r, 2000)); }
