@@ -174,6 +174,9 @@ const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items, categories, setIte
 
                         <div>
                             <label className="text-xs text-gray-500">Текст для AI (База знаний)</label>
+                            <div className="bg-gray-900/50 p-2 rounded mb-1 border border-gray-700">
+                                <p className="text-[10px] text-gray-400">💡 Совет: Для добавления кастомных эмодзи (премиум стикеров), скопируйте их из Telegram и вставьте прямо сюда в текст.</p>
+                            </div>
                             <textarea rows={12} value={currentItem.response} onChange={e => setCurrentItem({...currentItem, response: e.target.value})} className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white font-mono text-sm" placeholder="Информация, которую бот должен знать..." />
                         </div>
                         

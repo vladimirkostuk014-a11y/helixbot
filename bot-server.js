@@ -186,9 +186,10 @@ const getAIResponse = async (question, userName) => {
     let instructions = `Role: ${state.config.botName || 'Helix'}. Personality: ${aiPersonality}. Language: Russian.
     
     CRITICAL RULES:
-    1. DO NOT use emojis (🙂, 🔥, etc.) in your generated text.
-    2. EXCEPTION: If the [DATABASE] content contains emojis (including custom Telegram emojis), you MUST preserve them exactly.
-    3. If the answer comes from the database, copy it accurately.
+    1. STRICTLY FORBIDDEN: Do NOT use any emojis (like 🙂, 🔥, ✨) in your own generated text. 
+    2. EXCEPTION: You MUST output emojis ONLY if they appear inside the [DATABASE] content. Copy them exactly.
+    3. If answering from the database, copy the response accurately, including any custom emojis provided there.
+    4. Keep answers concise.
     `;
     
     if (aiProfanity) {
@@ -205,13 +206,23 @@ const getAIResponse = async (question, userName) => {
             body: JSON.stringify({
                 model: aiModel || "llama-3.3-70b-versatile",
                 messages: [{ role: "system", content: instructions + "\n\nDATABASE:\n" + kbContent }, { role: "user", content: question }],
-                temperature: aiProfanity ? 0.9 : 0.3, // Lower temperature for stability
+                temperature: 0.1, // Ultra low temperature to prevent emoji hallucinations
                 max_tokens: 800
             })
         });
+
         const data = await res.json();
-        return data.choices?.[0]?.message?.content || "AI Error.";
-    } catch (e) { return "Net Error."; }
+        
+        if (!res.ok) {
+            console.error("❌ Groq API Error:", JSON.stringify(data));
+            return `AI Error (${res.status}): ${data.error?.message || 'Unknown'}`;
+        }
+
+        return data.choices?.[0]?.message?.content || "AI Error (Empty).";
+    } catch (e) { 
+        console.error("AI Network Error:", e);
+        return "Net Error."; 
+    }
 };
 
 // --- HELPER: ENSURE USER EXISTS ---
@@ -248,13 +259,12 @@ const processUpdate = async (upd) => {
         const threadId = m.message_thread_id ? String(m.message_thread_id) : 'general';
         const isPrivate = m.chat.type === 'private';
 
-        // --- USER LEFT LOGIC ---
+        // --- USER LEFT LOGIC (FORCE REMOVE) ---
         if (m.left_chat_member) {
             const leftUid = String(m.left_chat_member.id);
-            if (state.users[leftUid]) {
-                await remove(ref(db, `users/${leftUid}`));
-                console.log(`User ${leftUid} removed from DB (left chat)`);
-            }
+            // Always try to remove, don't check if exists to ensure cleanup
+            await remove(ref(db, `users/${leftUid}`));
+            console.log(`User ${leftUid} removed from DB (left chat)`);
             return; 
         }
 
@@ -350,8 +360,6 @@ const processUpdate = async (upd) => {
             
             const newWarns = Math.max(0, (val.warnings || 0) - 1);
             
-            // If was muted and warnings drop, we could unmute, but usually unmute is manual or by time.
-            // For now just update stats.
             await firebaseUpdate(targetRef, { warnings: newWarns });
 
             const cmd = state.commands.find(c => c.trigger === '_unwarn_');

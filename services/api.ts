@@ -49,15 +49,6 @@ CRITICAL INSTRUCTION (STRICTNESS LEVEL ${strictness}%):
    - You MUST find the exact answer in [KNOWLEDGE BASE].
    - IF NOT FOUND IN [KNOWLEDGE BASE]: You MUST say "Этой информации нет в моей базе знаний." OR "Я не знаю этого."
    - DO NOT USE OUTSIDE INTERNET KNOWLEDGE. DO NOT HALLUCINATE.
-4. IF the user asks Small Talk (Hello, How are you):
-   - IF STRICTNESS = 100: IGNORE or say "Я отвечаю только на вопросы по базе."
-   - IF STRICTNESS < 100: Chat normally using your Persona (${config.aiPersonality}).
-`;
-    } else {
-        strictInstructions = `
-INSTRUCTION:
-- Priority Source: [KNOWLEDGE BASE].
-- If not found, you may use general knowledge, but warn the user.
 `;
     }
 
@@ -98,7 +89,7 @@ ${knowledgeBaseContext}
                     { role: "system", content: systemPrompt },
                     { role: "user", content: question }
                 ],
-                temperature: strictness >= 90 ? 0.1 : 0.3, 
+                temperature: 0.1, // Ultra low to prevent emoji hallucination
                 max_tokens: 800,
             })
         });
