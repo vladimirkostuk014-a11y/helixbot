@@ -63,25 +63,24 @@ setInterval(() => {
 }, 10000);
 
 // ==========================================
-// 3. API TELEGRAM (FIXED FOR MEDIA)
+// 3. API TELEGRAM (WITH ROBUST TIMEOUTS)
 // ==========================================
 const apiCall = async (method, body) => {
     if (!state.config.token) return;
     
     try {
+        const pollTimeout = body.timeout ? (body.timeout + 10) * 1000 : 30000;
+        
         let options = {
             method: 'POST',
-            timeout: 30000
+            timeout: pollTimeout
         };
 
-        // Проверяем наличие медиа в формате Base64 (начинается с data:)
         const mediaField = body.photo ? 'photo' : (body.video ? 'video' : null);
         const hasBase64 = mediaField && typeof body[mediaField] === 'string' && body[mediaField].startsWith('data:');
 
         if (hasBase64) {
             const form = new FormData();
-            
-            // Конвертируем Base64 в Buffer
             const base64Data = body[mediaField].split(',')[1];
             const mimeMatch = body[mediaField].match(/:(.*?);/);
             const mime = mimeMatch ? mimeMatch[1] : (mediaField === 'video' ? 'video/mp4' : 'image/jpeg');
@@ -90,7 +89,6 @@ const apiCall = async (method, body) => {
             
             form.append(mediaField, buffer, filename);
             
-            // Добавляем остальные поля
             Object.keys(body).forEach(key => {
                 if (key !== mediaField && body[key] !== undefined) {
                     const val = typeof body[key] === 'object' ? JSON.stringify(body[key]) : body[key];
@@ -99,7 +97,6 @@ const apiCall = async (method, body) => {
             });
             
             options.body = form;
-            // Headers для FormData ставятся автоматически node-fetch/formdata-node
         } else {
             options.headers = { 'Content-Type': 'application/json' };
             options.body = JSON.stringify(body);
@@ -108,34 +105,12 @@ const apiCall = async (method, body) => {
         const res = await fetch(`https://api.telegram.org/bot${state.config.token}/${method}`, options);
         return await res.json();
     } catch (e) { 
+        if (method === 'getUpdates' && (e.type === 'request-timeout' || e.code === 'ETIMEDOUT' || e.message.includes('timeout'))) {
+            return { ok: false, ignore: true };
+        }
         console.error(`API Error (${method}):`, e.message);
         return { ok: false, description: e.message }; 
     }
-};
-
-// --- HELPER: LOG BOT RESPONSE TO DB ---
-const logBotMessage = async (userId, text, type = 'text') => {
-    if (!userId) return;
-    try {
-        const userRef = ref(db, `users/${userId}`);
-        const snap = await get(userRef);
-        if (snap.exists()) {
-            const d = snap.val();
-            const newMsg = {
-                dir: 'out',
-                text: text,
-                type: type,
-                time: new Date().toLocaleTimeString('ru-RU'),
-                timestamp: Date.now(),
-                isIncoming: false,
-                isGroup: false, 
-                user: state.config.botName || 'Bot'
-            };
-            const history = d.history ? Object.values(d.history) : [];
-            const updatedHistory = [...history, newMsg].slice(-50);
-            await firebaseUpdate(userRef, { history: updatedHistory });
-        }
-    } catch (e) { console.error("Log bot msg error", e); }
 };
 
 // ==========================================
@@ -146,7 +121,6 @@ setInterval(async () => {
     // MSK is UTC+3
     const mskHours = (now.getUTCHours() + 3) % 24;
     
-    // Проверка на 00:00
     if (mskHours === 0 && now.getMinutes() === 0) {
         if (!dailyTopSent && state.config.enableAutoTop) {
             console.log("[Scheduler] Triggering Daily Top at 00:00 MSK");
@@ -156,7 +130,7 @@ setInterval(async () => {
     } else {
         dailyTopSent = false;
     }
-}, 30000); // Check every 30s
+}, 30000); 
 
 const sendDailyTop = async () => {
     if (!state.config.targetChatId) return;
@@ -168,7 +142,6 @@ const sendDailyTop = async () => {
 
     const topCommand = state.commands.find(c => c.trigger === '_daily_top_');
     
-    // Если никого не было и команды нет - выходим. Если команда есть - можем отправить пустой топ.
     if (!topCommand && sortedUsers.length === 0) return;
 
     let listStr = "";
@@ -181,9 +154,7 @@ const sendDailyTop = async () => {
         listStr = "Сегодня никто не писал 😔";
     }
 
-    // Если есть команда, используем её шаблон. Иначе дефолт.
     let resp = topCommand ? topCommand.response : "🏆 <b>Топ активных участников за день:</b>\n\n{top_list}";
-    // Заменяем плейсхолдер {top_list}
     resp = resp.replace(/{top_list}/g, listStr);
 
     const kb = topCommand?.buttons?.length > 0 ? { inline_keyboard: topCommand.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
@@ -195,7 +166,6 @@ const sendDailyTop = async () => {
         await apiCall('sendMessage', { chat_id: state.config.targetChatId, text: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: tid });
     }
 
-    // Сброс счетчиков
     for (const uid of Object.keys(state.users)) {
         await firebaseUpdate(ref(db, `users/${uid}`), { dailyMsgCount: 0 });
     }
@@ -205,14 +175,21 @@ const sendDailyTop = async () => {
 // 5. AI LOGIC
 // ==========================================
 const getAIResponse = async (question, userName) => {
-    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, aiStrictness, customProfanityList } = state.config;
+    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, customProfanityList } = state.config;
     if (!openaiApiKey) return "⚠️ Ключ AI не найден.";
 
     const kbContent = state.knowledgeBase.length > 0 
         ? state.knowledgeBase.map(k => `[TITLE: ${k.title}]\n${k.response}`).join('\n\n')
         : "База знаний пуста.";
 
-    let instructions = `Role: ${state.config.botName || 'Helix'}. Personality: ${aiPersonality}. Language: Russian. `;
+    // UPDATED PROMPT: STRICT NO EMOJI POLICY (UNLESS IN KB)
+    let instructions = `Role: ${state.config.botName || 'Helix'}. Personality: ${aiPersonality}. Language: Russian.
+    
+    CRITICAL RULES:
+    1. DO NOT use emojis (🙂, 🔥, etc.) in your generated text.
+    2. EXCEPTION: If the [DATABASE] content contains emojis (including custom Telegram emojis), you MUST preserve them exactly.
+    3. If the answer comes from the database, copy it accurately.
+    `;
     
     if (aiProfanity) {
         instructions += `\nMODE: TOXIC/PROFANITY. 
@@ -228,13 +205,34 @@ const getAIResponse = async (question, userName) => {
             body: JSON.stringify({
                 model: aiModel || "llama-3.3-70b-versatile",
                 messages: [{ role: "system", content: instructions + "\n\nDATABASE:\n" + kbContent }, { role: "user", content: question }],
-                temperature: aiProfanity ? 0.9 : 0.5,
+                temperature: aiProfanity ? 0.9 : 0.3, // Lower temperature for stability
                 max_tokens: 800
             })
         });
         const data = await res.json();
         return data.choices?.[0]?.message?.content || "AI Error.";
     } catch (e) { return "Net Error."; }
+};
+
+// --- HELPER: ENSURE USER EXISTS ---
+const ensureUserExists = async (user) => {
+    if (!user || user.is_bot) return;
+    const uid = String(user.id);
+    const userRef = ref(db, `users/${uid}`);
+    const snap = await get(userRef);
+    if (!snap.exists()) {
+        await set(userRef, {
+            id: user.id,
+            name: user.first_name,
+            username: user.username || '',
+            role: 'user',
+            status: 'active',
+            joinDate: new Date().toLocaleDateString(),
+            msgCount: 0,
+            warnings: 0,
+            dailyMsgCount: 0
+        });
+    }
 };
 
 // ==========================================
@@ -250,6 +248,16 @@ const processUpdate = async (upd) => {
         const threadId = m.message_thread_id ? String(m.message_thread_id) : 'general';
         const isPrivate = m.chat.type === 'private';
 
+        // --- USER LEFT LOGIC ---
+        if (m.left_chat_member) {
+            const leftUid = String(m.left_chat_member.id);
+            if (state.users[leftUid]) {
+                await remove(ref(db, `users/${leftUid}`));
+                console.log(`User ${leftUid} removed from DB (left chat)`);
+            }
+            return; 
+        }
+
         // --- GROUP LOGIC ---
         if (!isPrivate) {
             const correctId = String(m.chat.id);
@@ -259,20 +267,42 @@ const processUpdate = async (upd) => {
             if (state.groups[correctId]?.isDisabled) return;
         }
 
-        // --- USER TRACKING ---
+        // --- USER TRACKING & HISTORY ---
         let dbUserRole = 'user';
         if (user && !user.is_bot) {
             const uid = String(user.id);
             const local = state.users[uid];
             dbUserRole = local?.role || 'user';
             
-            const updates = {
+            let updates = {
                 name: user.first_name,
                 username: user.username || '',
                 lastSeen: new Date().toLocaleTimeString('ru-RU'),
                 msgCount: (local?.msgCount || 0) + 1,
                 dailyMsgCount: (local?.dailyMsgCount || 0) + 1
             };
+
+            if (isPrivate && (m.text || m.caption)) {
+                const msgText = m.text || m.caption || '[Media]';
+                const newMsg = {
+                    dir: 'in',
+                    text: msgText,
+                    type: m.photo ? 'photo' : (m.video ? 'video' : 'text'),
+                    time: new Date().toLocaleTimeString('ru-RU'),
+                    timestamp: Date.now(),
+                    isIncoming: true,
+                    isGroup: false,
+                    user: user.first_name,
+                    msgId: m.message_id
+                };
+                
+                const history = local?.history ? Object.values(local.history) : [];
+                const updatedHistory = [...history, newMsg].slice(-50);
+                
+                updates.history = updatedHistory;
+                updates.unreadCount = (local?.unreadCount || 0) + 1;
+            }
+
             if (!local) {
                 updates.id = user.id;
                 updates.role = 'user';
@@ -290,6 +320,9 @@ const processUpdate = async (upd) => {
             if (welcome) {
                 for (const member of m.new_chat_members) {
                     if (member.is_bot) continue;
+                    // Ensure new member exists in DB immediately
+                    await ensureUserExists(member);
+
                     let text = welcome.response.replace(/{user}/g, `<a href="tg://user?id=${member.id}">${member.first_name}</a>`).replace(/{name}/g, member.first_name);
                     const kb = welcome.buttons?.length > 0 ? { inline_keyboard: welcome.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
                     
@@ -309,19 +342,20 @@ const processUpdate = async (upd) => {
         // --- UNWARN LOGIC (FIXED) ---
         if (lowerTxt.startsWith('/unwarn') && m.reply_to_message && dbUserRole === 'admin') {
             const target = m.reply_to_message.from;
+            await ensureUserExists(target); // Ensure user is in DB
+
             const targetRef = ref(db, `users/${target.id}`);
             const snap = await get(targetRef);
             let val = snap.val() || { warnings: 0 };
             
-            // Уменьшаем счетчик
             const newWarns = Math.max(0, (val.warnings || 0) - 1);
+            
+            // If was muted and warnings drop, we could unmute, but usually unmute is manual or by time.
+            // For now just update stats.
             await firebaseUpdate(targetRef, { warnings: newWarns });
 
-            // Ищем шаблон ответа для _unwarn_ или берем дефолтный
             const cmd = state.commands.find(c => c.trigger === '_unwarn_');
             let resp = cmd ? cmd.response : "🕊 <b>{target_name}</b>, предупреждение снято. Счет: {warns}/3.";
-            
-            // Заменяем переменные
             resp = resp.replace(/{target_name}/g, target.first_name).replace(/{warns}/g, String(newWarns));
 
             await apiCall('sendMessage', { 
@@ -333,29 +367,38 @@ const processUpdate = async (upd) => {
             return;
         }
 
-        // --- WARN LOGIC ---
+        // --- WARN LOGIC (FIXED) ---
         if (lowerTxt.startsWith('/warn') && m.reply_to_message && dbUserRole === 'admin') {
             const target = m.reply_to_message.from;
+            await ensureUserExists(target); // Ensure user is in DB
+
             const targetRef = ref(db, `users/${target.id}`);
             const snap = await get(targetRef);
             let val = snap.val() || { warnings: 0 };
             
             const newWarns = (val.warnings || 0) + 1;
-            await firebaseUpdate(targetRef, { warnings: newWarns });
+            let status = val.status || 'active';
 
-            const cmd = state.commands.find(c => c.trigger === '_warn_');
-            let resp = cmd ? cmd.response : "⚠️ <b>{target_name}</b>, вам выдано предупреждение. Счет: {warns}/3.";
-            resp = resp.replace(/{target_name}/g, target.first_name).replace(/{warns}/g, String(newWarns));
-
+            // MUTE LOGIC (3/3)
             if (newWarns >= 3) {
+                status = 'muted';
+                // Mute for 24 hours
                 await apiCall('restrictChatMember', { 
                     chat_id: cid, 
                     user_id: target.id, 
                     permissions: JSON.stringify({ can_send_messages: false }), 
                     until_date: Math.floor(Date.now()/1000) + 86400 
                 });
-                await firebaseUpdate(targetRef, { warnings: 0, status: 'muted' });
-                resp += "\n🛑 Пользователь заглушен на 24 часа.";
+            }
+
+            await firebaseUpdate(targetRef, { warnings: newWarns, status: status });
+
+            const cmd = state.commands.find(c => c.trigger === '_warn_');
+            let resp = cmd ? cmd.response : "⚠️ <b>{target_name}</b>, вам выдано предупреждение. Счет: {warns}/3.";
+            resp = resp.replace(/{target_name}/g, target.first_name).replace(/{warns}/g, String(newWarns));
+
+            if (newWarns >= 3) {
+                resp += "\n🛑 <b>Достигнут лимит!</b> Вы заглушены на 24 часа.";
             }
 
             await apiCall('sendMessage', { 
@@ -370,6 +413,7 @@ const processUpdate = async (upd) => {
         // --- BAN/UNBAN LOGIC ---
         if (lowerTxt.startsWith('/ban') && dbUserRole === 'admin' && m.reply_to_message) {
              const target = m.reply_to_message.from;
+             await ensureUserExists(target);
              await firebaseUpdate(ref(db, `users/${target.id}`), { status: 'banned' });
              await apiCall('banChatMember', { chat_id: cid, user_id: target.id });
              await apiCall('sendMessage', { chat_id: cid, text: `⛔️ <b>${target.first_name}</b> забанен.`, parse_mode: 'HTML' });
@@ -386,18 +430,15 @@ const processUpdate = async (upd) => {
             if (match) {
                 if (cmd.isSystem && dbUserRole !== 'admin') continue;
                 
-                // Permission Check
                 const hasRole = cmd.allowedRoles ? cmd.allowedRoles.includes(dbUserRole) : true;
                 if (!hasRole) continue;
 
-                // Topic Check
                 if (cmd.allowedTopicId && cmd.allowedTopicId !== 'private_only' && cmd.allowedTopicId !== String(threadId) && !isPrivate) continue;
                 if (cmd.allowedTopicId === 'private_only' && !isPrivate) continue;
 
                 let resp = cmd.response.replace(/{user}/g, user.first_name).replace(/{name}/g, user.first_name);
                 const kb = cmd.buttons?.length > 0 ? { inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
                 
-                // Используем message_thread_id только если это не general
                 const targetThread = threadId !== 'general' ? threadId : undefined;
 
                 if (cmd.mediaUrl) {
@@ -425,18 +466,22 @@ const processUpdate = async (upd) => {
 };
 
 const start = async () => {
-    console.log("Bot Server Started");
+    console.log("Bot Server Started. Waiting for updates...");
     while (true) {
         if (state.config.token) {
             try {
-                const res = await apiCall('getUpdates', { offset: lastUpdateId + 1, timeout: 30 });
+                // Use a longer timeout for getUpdates (50s) to keep connection open (Long Polling)
+                const res = await apiCall('getUpdates', { offset: lastUpdateId + 1, timeout: 50 });
                 if (res?.ok && res.result.length > 0) {
                     for (const u of res.result) {
                         lastUpdateId = u.update_id;
                         await processUpdate(u);
                     }
                 }
-            } catch (e) { await new Promise(r => setTimeout(r, 5000)); }
+            } catch (e) { 
+                console.error("Loop error:", e);
+                await new Promise(r => setTimeout(r, 5000)); 
+            }
         } else { await new Promise(r => setTimeout(r, 2000)); }
     }
 };

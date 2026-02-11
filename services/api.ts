@@ -66,10 +66,16 @@ INSTRUCTION:
         profanityRule = `USE THESE WORDS IN YOUR REPLY: ${JSON.stringify(config.customProfanityList)}.`;
     }
 
+    // UPDATED SYSTEM PROMPT
     const systemPrompt = `
 Role: ${config.botName || 'Helix'}. 
 Persona: ${config.aiPersonality}. 
 Language: Russian.
+
+CRITICAL EMOJI RULES:
+1. DO NOT use emojis (🙂, 🔥, etc.) in your own generated text.
+2. EXCEPTION: If the [KNOWLEDGE BASE] content contains emojis (including custom Telegram emojis), you MUST preserve them exactly.
+3. If the answer comes from the database, copy it accurately.
 
 ${strictInstructions}
 
@@ -92,7 +98,7 @@ ${knowledgeBaseContext}
                     { role: "system", content: systemPrompt },
                     { role: "user", content: question }
                 ],
-                temperature: strictness >= 90 ? 0.1 : 0.4, 
+                temperature: strictness >= 90 ? 0.1 : 0.3, 
                 max_tokens: 800,
             })
         });
