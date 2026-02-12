@@ -33,24 +33,19 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     const [showAiModal, setShowAiModal] = useState(false);
     const [aiModalTab, setAiModalTab] = useState<'history' | 'top'>('history');
     
-    // Settings Auth - PERSISTENT STATE FIX
+    // Settings Auth
     const [isSettingsUnlocked, setIsSettingsUnlocked] = useState(() => {
         return sessionStorage.getItem('helix_settings_unlocked') === 'true';
     });
     const [settingsPass, setSettingsPass] = useState('');
     const [settingsError, setSettingsError] = useState(false);
-
-    // Profanity List State
     const [newProfanityWord, setNewProfanityWord] = useState('');
-    
-    // AI Playground State
     const [showPlayground, setShowPlayground] = useState(false);
     const [playgroundInput, setPlaygroundInput] = useState('');
     const [playgroundHistory, setPlaygroundHistory] = useState<{role: 'user'|'bot', text: string}[]>([]);
     const [isPlaygroundThinking, setIsPlaygroundThinking] = useState(false);
     const playgroundEndRef = useRef<HTMLDivElement>(null);
 
-    // FIX: Count ALL real users (including banned), exclude only system IDs
     const userArray: User[] = Object.values(users);
     const realUsers = userArray.filter(u => u.id > 0 && u.id !== 777000 && u.id !== 1087968824);
     const activeUsers = realUsers.filter(u => u.dailyMsgCount > 0).sort((a, b) => b.dailyMsgCount - a.dailyMsgCount);
@@ -66,7 +61,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         try {
             if (btoa(settingsPass) === SETTINGS_HASH) {
                 setIsSettingsUnlocked(true);
-                sessionStorage.setItem('helix_settings_unlocked', 'true'); // Persist unlock
+                sessionStorage.setItem('helix_settings_unlocked', 'true');
                 setSettingsError(false);
             } else {
                 setSettingsError(true);
@@ -89,12 +84,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     };
     
     const handleSave = (section: 'ai' | 'ban') => {
-        // Ensure we save clean key
         const cleanConfig = { ...config };
-        if (cleanConfig.openaiApiKey) {
-            cleanConfig.openaiApiKey = cleanConfig.openaiApiKey.trim();
-        }
-        
+        if (cleanConfig.openaiApiKey) cleanConfig.openaiApiKey = cleanConfig.openaiApiKey.trim();
         saveData('config', cleanConfig);
         setAiSaveStatus('Сохранено!');
         if (addLog) addLog('Настройки', `Обновлены настройки ${section === 'ai' ? 'AI' : 'Бан-лист'}`, 'info');
@@ -161,38 +152,51 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         saveData('config', newConfig); 
     };
 
+    // --- FIXED ACTIVITY DATA LOGIC ---
     const getActivityData = () => {
         const today = new Date();
         const year = today.getFullYear();
         const month = today.getMonth(); 
-        const lastDayOfMonth = new Date(year, month + 1, 0).getDate();
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        
+        // Map keys "DD.MM" -> data
         const dataMap = new Map<string, { date: string, messages: number, ai: number }>();
-        for (let i = 1; i <= lastDayOfMonth; i++) {
+        
+        // Initialize map with empty days
+        for (let i = 1; i <= daysInMonth; i++) {
             const d = new Date(year, month, i);
-            const dateStr = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-            dataMap.set(dateStr, { date: dateStr, messages: 0, ai: 0 });
+            const dateKey = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }); // "12.02"
+            dataMap.set(dateKey, { date: dateKey, messages: 0, ai: 0 });
         }
         
+        // Process User Messages
         if (users) {
             Object.values(users).forEach(user => {
                 if (user && user.history) {
                     user.history.forEach(msg => {
-                        const msgDate = msg.timestamp ? new Date(msg.timestamp) : new Date();
+                        if (!msg.timestamp) return;
+                        const msgDate = new Date(msg.timestamp);
+                        // Filter for current month/year only
                         if (msgDate.getFullYear() === year && msgDate.getMonth() === month && msg.isGroup) {
-                            const dateStr = msgDate.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-                            if (dataMap.has(dateStr)) dataMap.get(dateStr)!.messages += 1;
+                            const dateKey = msgDate.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+                            if (dataMap.has(dateKey)) {
+                                dataMap.get(dateKey)!.messages += 1;
+                            }
                         }
                     });
                 }
             });
         }
         
+        // Process AI Stats
         if (aiStats && aiStats.history) {
             aiStats.history.forEach(stat => {
-                 const d = new Date(stat.time);
-                 if (d.getFullYear() === year && d.getMonth() === month) {
-                    const dateStr = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-                    if (dataMap.has(dateStr)) dataMap.get(dateStr)!.ai += 1;
+                 const statDate = new Date(stat.time);
+                 if (statDate.getFullYear() === year && statDate.getMonth() === month) {
+                    const dateKey = statDate.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+                    if (dataMap.has(dateKey)) {
+                        dataMap.get(dateKey)!.ai += 1;
+                    }
                  }
             });
         }
@@ -295,6 +299,10 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                 onChange={e => setConfig({...config, aiStrictness: parseInt(e.target.value)})}
                                 className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
                             />
+                            <p className="text-[10px] text-gray-500 mt-1">
+                                90-100% = Бот отвечает <b>только</b> по базе. Если не знает — молчит или говорит, что не знает. <br/>
+                                0-50% = Бот может выдумывать факты из интернета.
+                            </p>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -306,7 +314,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                     <option value="official">🧐 Официальный</option>
                                     <option value="joker">🤡 Шутник</option>
                                     <option value="angry">😡 Злой</option>
-                                    <option value="gopnik">🍺 Гопник</option>
+                                    <option value="gopnik">🍺 Гопник (Токсик)</option>
                                 </select>
                             </div>
                             <div>
@@ -322,23 +330,23 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                         <div className="flex flex-wrap gap-4">
                             <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-gray-900/50 border border-gray-700 hover:border-red-500/50 transition-colors">
                                 <input type="checkbox" checked={config.aiProfanity || false} onChange={e => setConfig({...config, aiProfanity: e.target.checked})} className="accent-red-500 w-5 h-5"/>
-                                <span className="text-sm text-red-300 font-bold">🤬 Режим мата</span>
+                                <span className="text-sm text-red-300 font-bold">🤬 Режим мата (Токсичность)</span>
                             </label>
                             <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-gray-900/50 border border-gray-700 hover:border-blue-500/50 transition-colors">
                                 <input type="checkbox" checked={config.enablePM || false} onChange={e => setConfig({...config, enablePM: e.target.checked})} className="accent-blue-500 w-5 h-5"/>
-                                <span className="text-sm text-blue-300 font-bold">📩 Отвечать в ЛС</span>
+                                <span className="text-sm text-blue-300 font-bold">📩 Отвечать в ЛС (Личка)</span>
                             </label>
                         </div>
 
                          {config.aiProfanity && (
                             <div className="bg-gray-900/30 p-4 rounded-xl border border-gray-700 animate-slideIn">
-                                <label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Свои словечки (База для мата)</label>
+                                <label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Свои словечки (Бот будет использовать их)</label>
                                 <div className="flex gap-2 mb-2">
                                     <input 
                                         value={newProfanityWord} 
                                         onChange={e => setNewProfanityWord(e.target.value)} 
                                         onKeyDown={e => e.key === 'Enter' && handleAddProfanity()}
-                                        placeholder="Добавить фразу..." 
+                                        placeholder="Добавить фразу (напр. 'Йоу', 'Ну ты даешь')..." 
                                         className="flex-1 bg-black border border-gray-600 rounded px-3 py-1.5 text-sm text-white focus:border-red-500 outline-none"
                                     />
                                     <button onClick={handleAddProfanity} className="bg-red-900/40 text-red-300 border border-red-500/30 px-3 rounded text-sm hover:bg-red-900/60"><Icons.Plus size={16}/></button>
@@ -396,9 +404,11 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
             </div>
         );
     }
-
+    
+    // ... Rest of Dashboard logic (KPICards, Charts render)
     return (
         <div className="space-y-8 relative">
+            {/* KPI Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 <KpiCard 
                     icon={Icons.Users} title="Всего пользователей" 
@@ -427,7 +437,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     actionIcon={Icons.Send}
                 />
             </div>
-            {/* Charts Area and Modals kept same */}
+
+            {/* Charts Area */}
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
                 <div className="xl:col-span-2 bg-[#121214] p-6 rounded-2xl border border-gray-800 shadow-xl">
                     <div className="flex items-center justify-between mb-6">
@@ -458,6 +469,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                 </div>
                 
+                {/* Status Card & Logs */}
                 <div className="bg-[#121214] rounded-2xl border border-gray-800 shadow-xl flex flex-col h-full overflow-hidden">
                     <div className="p-6 border-b border-gray-800 text-center bg-gradient-to-b from-gray-900 to-[#121214]">
                         <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3 text-white transition-all duration-500 ${isAiThinking ? 'bg-purple-600 shadow-[0_0_20px_rgba(147,51,234,0.5)] scale-110' : 'bg-gray-800'}`}>
@@ -485,7 +497,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                 </div>
             </div>
-            {/* Existing Modals */}
+
+            {/* Existing Modals code... (Active, Groups, AI Stats) same as before */}
             {showActiveModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowActiveModal(false)}>
                     <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl p-6 animate-slideIn" onClick={e => e.stopPropagation()}>

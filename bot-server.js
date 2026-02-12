@@ -29,11 +29,11 @@ let state = {
     topicNames: {},
     aiStats: { total: 0, history: [] },
     disabledAiTopics: [],
-    isBotActive: true 
+    isBotActive: true,
+    topicHistory: {} // Local cache for quick appending
 };
 
 let lastUpdateId = 0;
-const processedUpdates = new Set();
 let dailyTopSent = false;
 
 // ==========================================
@@ -55,6 +55,8 @@ sync('knowledgeBase', 'knowledgeBase', true);
 sync('topicNames', 'topicNames');
 sync('aiStats', 'aiStats');
 sync('disabledAiTopics', 'disabledAiTopics', true);
+sync('topicHistory', 'topicHistory'); // Sync live chat history
+
 onValue(ref(db, 'status/active'), (s) => state.isBotActive = s.val() !== false);
 
 // --- HEARTBEAT ---
@@ -63,7 +65,7 @@ setInterval(() => {
 }, 10000);
 
 // ==========================================
-// 3. API TELEGRAM (WITH ROBUST TIMEOUTS)
+// 3. API TELEGRAM
 // ==========================================
 const apiCall = async (method, body) => {
     if (!state.config.token) return;
@@ -91,7 +93,8 @@ const apiCall = async (method, body) => {
             
             Object.keys(body).forEach(key => {
                 if (key !== mediaField && body[key] !== undefined) {
-                    const val = typeof body[key] === 'object' ? JSON.stringify(body[key]) : body[key];
+                    let val = body[key];
+                    if (typeof val === 'object') val = JSON.stringify(val);
                     form.append(key, val);
                 }
             });
@@ -105,7 +108,7 @@ const apiCall = async (method, body) => {
         const res = await fetch(`https://api.telegram.org/bot${state.config.token}/${method}`, options);
         return await res.json();
     } catch (e) { 
-        if (method === 'getUpdates' && (e.type === 'request-timeout' || e.code === 'ETIMEDOUT' || e.message.includes('timeout'))) {
+        if (method === 'getUpdates' && (e.type === 'request-timeout' || e.code === 'ETIMEDOUT')) {
             return { ok: false, ignore: true };
         }
         console.error(`API Error (${method}):`, e.message);
@@ -122,7 +125,6 @@ setInterval(async () => {
     
     if (mskHours === 0 && now.getMinutes() === 0) {
         if (!dailyTopSent && state.config.enableAutoTop) {
-            console.log("[Scheduler] Triggering Daily Top at 00:00 MSK");
             await sendDailyTop();
             dailyTopSent = true;
         }
@@ -170,49 +172,72 @@ const sendDailyTop = async () => {
 };
 
 // ==========================================
-// 5. AI LOGIC (ROBUST KEY FETCHING)
+// 5. AI LOGIC (FIXED PROMPTS & STRICTNESS)
 // ==========================================
 const getAIResponse = async (question, userName) => {
-    let { aiBaseUrl, aiModel, aiPersonality, aiProfanity, customProfanityList } = state.config;
+    let { aiBaseUrl, aiModel, aiPersonality, aiProfanity, customProfanityList, aiStrictness, aiBehavior } = state.config;
     
-    // 1. Force Fetch fresh config from DB to ensure Key is latest
+    // 1. Fetch Key
     let apiKeyToUse = "";
     try {
         const configSnap = await get(ref(db, 'config'));
-        const remoteConfig = configSnap.val() || {};
-        apiKeyToUse = remoteConfig.openaiApiKey || "";
-        
-        // Remove whitespace which causes Invalid API Key
-        apiKeyToUse = apiKeyToUse.trim(); 
-        
-        if (apiKeyToUse) {
-            console.log(`[AI] Using Key: ${apiKeyToUse.substring(0, 10)}... (Length: ${apiKeyToUse.length})`);
-        } else {
-            console.error("[AI] ❌ Key is EMPTY in Firebase!");
-        }
-    } catch (e) {
-        console.error("[AI] Error fetching config:", e);
-        // Fallback to state
-        apiKeyToUse = (state.config.openaiApiKey || "").trim();
-    }
+        apiKeyToUse = (configSnap.val()?.openaiApiKey || "").trim();
+    } catch (e) { apiKeyToUse = (state.config.openaiApiKey || "").trim(); }
 
-    if (!apiKeyToUse) return "⚠️ Ключ AI не найден. Администратор должен обновить его в панели.";
+    if (!apiKeyToUse) return "⚠️ Ключ AI не найден.";
 
+    const strictLevel = aiStrictness || 80;
+
+    // 2. Build Knowledge Base Text
     const kbContent = state.knowledgeBase.length > 0 
-        ? state.knowledgeBase.map(k => `[TITLE: ${k.title}]\n${k.response}`).join('\n\n')
+        ? state.knowledgeBase.map(k => `Q: ${k.triggers}\nA: ${k.response}`).join('\n\n')
         : "База знаний пуста.";
 
-    let instructions = `Role: ${state.config.botName || 'Helix'}. Personality: ${aiPersonality}. Language: Russian.
-    
-    CRITICAL RULES:
-    1. STRICTLY FORBIDDEN: Do NOT use any emojis (like 🙂, 🔥, ✨) in your own generated text. 
-    2. EXCEPTION: You MUST output emojis ONLY if they appear inside the [DATABASE] content. Copy them exactly.
-    3. If answering from the database, copy the response accurately.
-    `;
-    
-    if (aiProfanity) {
-        instructions += `\nMODE: TOXIC/PROFANITY. Use profanity. Words: ${JSON.stringify(customProfanityList || [])}.`;
+    // 3. PERSONALITY MAP
+    const personaMap = {
+        'helpful': 'Ты полезный помощник Хеликс. Ты вежлив и краток.',
+        'kind': 'Ты очень добрый и милый помощник. Используй уменьшительно-ласкательные слова.',
+        'official': 'Ты строгий официальный бот. Отвечай сухо, по делу, канцеляритом.',
+        'joker': 'Ты стендап-комик. Постоянно шути, даже если это неуместно.',
+        'angry': 'Ты злой бот. Ты ненавидишь отвечать на вопросы, но отвечаешь.',
+        'gopnik': 'Ты гопник с района. Общайся на ты, используй сленг (чё, каво, э слыш).'
+    };
+
+    let sysPrompt = `Role: ${personaMap[aiPersonality] || personaMap['helpful']}\nUser Name: ${userName}\nLanguage: Russian.\n`;
+
+    // 4. BEHAVIOR (Length)
+    if (aiBehavior === 'concise') sysPrompt += "Отвечай максимально коротко (1 предложение).\n";
+    if (aiBehavior === 'detailed') sysPrompt += "Отвечай подробно и развернуто.\n";
+
+    // 5. STRICTNESS LOGIC
+    if (strictLevel >= 90) {
+        sysPrompt += `\nCRITICAL STRICTNESS MODE: 
+        1. YOU MUST ONLY USE INFORMATION FROM THE [DATABASE] BELOW.
+        2. DO NOT use your own internet knowledge about games, items, or stats.
+        3. IF the answer is not in [DATABASE], YOU MUST SAY: "Извините, в моей базе знаний нет информации об этом."
+        4. NEVER HALLUCINATE OR INVENT FACTS.`;
+    } else {
+        sysPrompt += `\nPrioritize [DATABASE]. If not found, use your general knowledge but be concise.`;
     }
+
+    // 6. PROFANITY & CUSTOM WORDS
+    if (aiProfanity) {
+        sysPrompt += `\nMODE: UNFILTERED/PROFANITY.
+        1. You are rude and toxic.
+        2. Use heavy Russian swear words (мат) naturally.
+        3. Do not apologize.`;
+        
+        // Inject a random phrase from custom list to force usage
+        if (customProfanityList && customProfanityList.length > 0) {
+            const randomWord = customProfanityList[Math.floor(Math.random() * customProfanityList.length)];
+            sysPrompt += `\nINSTRUCTION: Try to fit the phrase "${randomWord}" naturally into your response.`;
+        }
+    } else {
+        sysPrompt += `\nNO PROFANITY. BE POLITE.`;
+    }
+
+    // 7. EMOJI RULE
+    sysPrompt += `\nEMOJI RULES: Do not add your own emojis. Only copy emojis if they are in the [DATABASE].`;
 
     try {
         const res = await fetch(`${aiBaseUrl || 'https://api.groq.com/openai/v1'}/chat/completions`, {
@@ -223,29 +248,58 @@ const getAIResponse = async (question, userName) => {
             },
             body: JSON.stringify({
                 model: aiModel || "llama-3.3-70b-versatile",
-                messages: [{ role: "system", content: instructions + "\n\nDATABASE:\n" + kbContent }, { role: "user", content: question }],
-                temperature: 0.1, 
+                messages: [
+                    { role: "system", content: sysPrompt + "\n\n[DATABASE]:\n" + kbContent },
+                    { role: "user", content: question }
+                ],
+                temperature: aiProfanity ? 0.7 : 0.1, // Higher temp for profanity/creativity
                 max_tokens: 800
             })
         });
 
         const data = await res.json();
-        
         if (!res.ok) {
-            console.error("❌ Groq API Error:", JSON.stringify(data));
-            // Log the key length used to debug
-            console.error(`❌ Key used (len=${apiKeyToUse.length}): ${apiKeyToUse.substring(0, 5)}***`);
-            return `AI Error (${res.status}): ${data.error?.message || 'Check Server Logs'}`;
+            console.error("AI Error:", JSON.stringify(data));
+            return `AI Error: ${data.error?.message}`;
         }
-
-        return data.choices?.[0]?.message?.content || "AI Error (Empty).";
+        return data.choices?.[0]?.message?.content || "...";
     } catch (e) { 
-        console.error("AI Network Error:", e);
-        return "Net Error."; 
+        console.error("AI Net Error:", e);
+        return "Ошибка сети AI."; 
     }
 };
 
-// --- HELPER: ENSURE USER EXISTS ---
+// --- HELPER: SAVE MESSAGE TO HISTORY (BOTH CRM AND TOPIC) ---
+const saveMessage = async (msgObj, uid, threadId) => {
+    // 1. Save to User CRM History
+    if (uid) {
+        const userRef = ref(db, `users/${uid}/history`);
+        const userSnap = await get(userRef);
+        let userHist = userSnap.val() || [];
+        if (!Array.isArray(userHist)) userHist = Object.values(userHist);
+        userHist.push(msgObj);
+        if (userHist.length > 50) userHist = userHist.slice(-50);
+        await set(userRef, userHist);
+    }
+
+    // 2. Save to Topic/LiveChat History
+    if (threadId) {
+        const topicRef = ref(db, `topicHistory/${threadId}`);
+        const topicSnap = await get(topicRef);
+        let topicHist = topicSnap.val() || [];
+        if (!Array.isArray(topicHist)) topicHist = Object.values(topicHist);
+        topicHist.push(msgObj);
+        // Keep topic history manageable
+        if (topicHist.length > 100) topicHist = topicHist.slice(-100);
+        await set(topicRef, topicHist);
+
+        // Update unread count for topic
+        const unreadRef = ref(db, `topicUnreads/${threadId}`);
+        const unreadSnap = await get(unreadRef);
+        await set(unreadRef, (unreadSnap.val() || 0) + 1);
+    }
+};
+
 const ensureUserExists = async (user) => {
     if (!user || user.is_bot) return;
     const uid = String(user.id);
@@ -276,8 +330,17 @@ const processUpdate = async (upd) => {
 
         const cid = String(m.chat.id);
         const user = m.from;
-        const threadId = m.message_thread_id ? String(m.message_thread_id) : 'general';
+        const threadId = m.message_thread_id ? String(m.message_thread_id) : (m.chat.type === 'private' ? String(user.id) : 'general');
         const isPrivate = m.chat.type === 'private';
+
+        // --- IGNORE PM IF DISABLED ---
+        if (isPrivate && !state.config.enablePM) {
+            // Check if it's an admin, admins can always use PM
+            const localUser = state.users[String(user.id)];
+            if (localUser?.role !== 'admin') {
+                return; // Ignore private message
+            }
+        }
 
         if (m.left_chat_member) {
             const leftUid = String(m.left_chat_member.id);
@@ -293,22 +356,25 @@ const processUpdate = async (upd) => {
             if (state.groups[correctId]?.isDisabled) return;
         }
 
+        // --- USER & HISTORY SYNC ---
         let dbUserRole = 'user';
         if (user && !user.is_bot) {
             const uid = String(user.id);
             const local = state.users[uid];
             dbUserRole = local?.role || 'user';
             
-            let updates = {
+            // Sync User Stats
+            await firebaseUpdate(ref(db, `users/${uid}`), {
                 name: user.first_name,
                 username: user.username || '',
                 lastSeen: new Date().toLocaleTimeString('ru-RU'),
                 msgCount: (local?.msgCount || 0) + 1,
                 dailyMsgCount: (local?.dailyMsgCount || 0) + 1
-            };
+            });
 
-            if (isPrivate && (m.text || m.caption)) {
-                const msgText = m.text || m.caption || '[Media]';
+            // Store Message in DB
+            if (m.text || m.caption || m.photo || m.video) {
+                const msgText = m.text || m.caption || (m.photo ? '[Photo]' : '[Video]');
                 const newMsg = {
                     dir: 'in',
                     text: msgText,
@@ -316,27 +382,23 @@ const processUpdate = async (upd) => {
                     time: new Date().toLocaleTimeString('ru-RU'),
                     timestamp: Date.now(),
                     isIncoming: true,
-                    isGroup: false,
+                    isGroup: !isPrivate,
                     user: user.first_name,
+                    userId: user.id,
                     msgId: m.message_id
                 };
-                
-                const history = local?.history ? Object.values(local.history) : [];
-                const updatedHistory = [...history, newMsg].slice(-50);
-                
-                updates.history = updatedHistory;
-                updates.unreadCount = (local?.unreadCount || 0) + 1;
+
+                // CRITICAL: Save to both User History and Live Chat Topic History
+                await saveMessage(newMsg, uid, threadId);
+
+                // Update Topic Names if needed
+                if (!state.topicNames[threadId]) {
+                    const topicName = isPrivate ? `${user.first_name} (LS)` : (m.reply_to_message?.forum_topic_created?.name || `Topic ${threadId}`);
+                    await set(ref(db, `topicNames/${threadId}`), topicName);
+                }
             }
 
-            if (!local) {
-                updates.id = user.id;
-                updates.role = 'user';
-                updates.status = 'active';
-                updates.joinDate = new Date().toLocaleDateString();
-                await set(ref(db, `users/${uid}`), updates);
-            } else {
-                await firebaseUpdate(ref(db, `users/${uid}`), updates);
-            }
+            if (!local) await ensureUserExists(user);
         }
 
         if (m.new_chat_members) {
@@ -345,7 +407,6 @@ const processUpdate = async (upd) => {
                 for (const member of m.new_chat_members) {
                     if (member.is_bot) continue;
                     await ensureUserExists(member);
-
                     let text = welcome.response.replace(/{user}/g, `<a href="tg://user?id=${member.id}">${member.first_name}</a>`).replace(/{name}/g, member.first_name);
                     const kb = welcome.buttons?.length > 0 ? { inline_keyboard: welcome.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
                     
@@ -362,57 +423,8 @@ const processUpdate = async (upd) => {
         const txt = m.text.trim();
         const lowerTxt = txt.toLowerCase();
 
-        if (lowerTxt.startsWith('/unwarn') && m.reply_to_message && dbUserRole === 'admin') {
-            const target = m.reply_to_message.from;
-            await ensureUserExists(target); 
-            const targetRef = ref(db, `users/${target.id}`);
-            const snap = await get(targetRef);
-            let val = snap.val() || { warnings: 0 };
-            const newWarns = Math.max(0, (val.warnings || 0) - 1);
-            await firebaseUpdate(targetRef, { warnings: newWarns });
-            const cmd = state.commands.find(c => c.trigger === '_unwarn_');
-            let resp = cmd ? cmd.response : "🕊 <b>{target_name}</b>, предупреждение снято. Счет: {warns}/3.";
-            resp = resp.replace(/{target_name}/g, target.first_name).replace(/{warns}/g, String(newWarns));
-            await apiCall('sendMessage', { chat_id: cid, text: resp, parse_mode: 'HTML', message_thread_id: threadId !== 'general' ? threadId : undefined });
-            return;
-        }
-
-        if (lowerTxt.startsWith('/warn') && m.reply_to_message && dbUserRole === 'admin') {
-            const target = m.reply_to_message.from;
-            await ensureUserExists(target); 
-            const targetRef = ref(db, `users/${target.id}`);
-            const snap = await get(targetRef);
-            let val = snap.val() || { warnings: 0 };
-            const newWarns = (val.warnings || 0) + 1;
-            let status = val.status || 'active';
-
-            if (newWarns >= 3) {
-                status = 'muted';
-                await apiCall('restrictChatMember', { 
-                    chat_id: cid, 
-                    user_id: target.id, 
-                    permissions: JSON.stringify({ can_send_messages: false }), 
-                    until_date: Math.floor(Date.now()/1000) + 86400 
-                });
-            }
-            await firebaseUpdate(targetRef, { warnings: newWarns, status: status });
-            const cmd = state.commands.find(c => c.trigger === '_warn_');
-            let resp = cmd ? cmd.response : "⚠️ <b>{target_name}</b>, вам выдано предупреждение. Счет: {warns}/3.";
-            resp = resp.replace(/{target_name}/g, target.first_name).replace(/{warns}/g, String(newWarns));
-            if (newWarns >= 3) resp += "\n🛑 <b>Достигнут лимит!</b> Вы заглушены на 24 часа.";
-            await apiCall('sendMessage', { chat_id: cid, text: resp, parse_mode: 'HTML', message_thread_id: threadId !== 'general' ? threadId : undefined });
-            return;
-        }
-
-        if (lowerTxt.startsWith('/ban') && dbUserRole === 'admin' && m.reply_to_message) {
-             const target = m.reply_to_message.from;
-             await ensureUserExists(target);
-             await firebaseUpdate(ref(db, `users/${target.id}`), { status: 'banned' });
-             await apiCall('banChatMember', { chat_id: cid, user_id: target.id });
-             await apiCall('sendMessage', { chat_id: cid, text: `⛔️ <b>${target.first_name}</b> забанен.`, parse_mode: 'HTML' });
-             return;
-        }
-
+        // --- COMMANDS LOGIC ---
+        // Check for commands
         for (const cmd of state.commands) {
             let match = false;
             if (cmd.matchType === 'exact') match = lowerTxt === cmd.trigger.toLowerCase();
@@ -427,25 +439,94 @@ const processUpdate = async (upd) => {
                 if (cmd.allowedTopicId === 'private_only' && !isPrivate) continue;
 
                 let resp = cmd.response.replace(/{user}/g, user.first_name).replace(/{name}/g, user.first_name);
+                // Fix: Serialize buttons correctly
                 const kb = cmd.buttons?.length > 0 ? { inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
                 const targetThread = threadId !== 'general' ? threadId : undefined;
 
                 if (cmd.mediaUrl) {
-                    await apiCall('sendPhoto', { chat_id: cid, photo: cmd.mediaUrl, caption: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThread });
+                    // When sending photo with buttons, reply_markup is part of the formdata or query params
+                    // apiCall handles it if we pass it in the body object, logic updated in apiCall function
+                    await apiCall('sendPhoto', { 
+                        chat_id: cid, 
+                        photo: cmd.mediaUrl, 
+                        caption: resp, 
+                        parse_mode: 'HTML', 
+                        reply_markup: kb, // IMPORTANT: Object, not string, apiCall handles stringify
+                        message_thread_id: targetThread 
+                    });
                 } else {
-                    await apiCall('sendMessage', { chat_id: cid, text: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThread });
+                    await apiCall('sendMessage', { 
+                        chat_id: cid, 
+                        text: resp, 
+                        parse_mode: 'HTML', 
+                        reply_markup: kb, 
+                        message_thread_id: targetThread 
+                    });
                 }
+                
+                // Log bot response to history
+                await saveMessage({
+                    dir: 'out',
+                    text: `[CMD] ${cmd.trigger}`,
+                    type: 'text',
+                    time: new Date().toLocaleTimeString('ru-RU'),
+                    timestamp: Date.now(),
+                    isIncoming: false,
+                    isGroup: !isPrivate,
+                    user: 'Bot'
+                }, String(user.id), threadId);
+                
                 return;
             }
         }
 
+        // --- AI LOGIC ---
         if (state.config.enableAI) {
+            // If private and PM enabled -> Always answer (unless command matched above)
+            // If group -> Only if trigger word used
             const isHelixTrigger = lowerTxt.startsWith('хеликс') || lowerTxt.startsWith('helix');
-            if (isPrivate || isHelixTrigger) {
+            
+            if ((isPrivate && state.config.enablePM) || isHelixTrigger) {
+                // If specific topic is disabled
+                if (state.disabledAiTopics && state.disabledAiTopics.includes(String(threadId))) return;
+
                 const q = txt.replace(/^(хеликс|helix)/i, '').trim();
                 if (q) {
                     const a = await getAIResponse(q, user.first_name);
-                    await apiCall('sendMessage', { chat_id: cid, text: a, reply_to_message_id: m.message_id, message_thread_id: threadId !== 'general' ? threadId : undefined });
+                    
+                    // Send Response
+                    await apiCall('sendMessage', { 
+                        chat_id: cid, 
+                        text: a, 
+                        reply_to_message_id: m.message_id, 
+                        message_thread_id: threadId !== 'general' ? threadId : undefined 
+                    });
+
+                    // Log AI Response to history
+                    await saveMessage({
+                        dir: 'out',
+                        text: a,
+                        type: 'text',
+                        time: new Date().toLocaleTimeString('ru-RU'),
+                        timestamp: Date.now(),
+                        isIncoming: false,
+                        isGroup: !isPrivate,
+                        user: 'Helix AI'
+                    }, String(user.id), threadId);
+                    
+                    // Save Stats
+                    const newStat = { query: q, response: a, time: Date.now() };
+                    const statsRef = ref(db, 'aiStats');
+                    const statsSnap = await get(statsRef);
+                    let stats = statsSnap.val() || { total: 0, history: [] };
+                    if(!stats.history) stats.history = [];
+                    if(!Array.isArray(stats.history)) stats.history = Object.values(stats.history);
+                    
+                    stats.history.push(newStat);
+                    stats.total = (stats.total || 0) + 1;
+                    if(stats.history.length > 200) stats.history = stats.history.slice(-200);
+                    
+                    await set(statsRef, stats);
                 }
             }
         }
@@ -453,7 +534,7 @@ const processUpdate = async (upd) => {
 };
 
 const start = async () => {
-    console.log("Bot Server Started. Waiting for updates...");
+    console.log("Bot Server Started.");
     while (true) {
         if (state.config.token) {
             try {

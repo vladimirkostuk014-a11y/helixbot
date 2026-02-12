@@ -43,7 +43,7 @@ const performAiRequest = async (apiKey: string, config: BotConfig, messages: any
         body: JSON.stringify({
             model: config.aiModel || "llama-3.3-70b-versatile",
             messages: messages,
-            temperature: 0.1, // Ultra low to prevent emoji hallucination
+            temperature: config.aiProfanity ? 0.7 : 0.1, // Higher temp for profanity/creativity
             max_tokens: 800,
         })
     });
@@ -54,50 +54,57 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
 
     if (!activeKey) return "⚠️ Ключ AI не найден. Настройте его в панели.";
     
-    // Clean key immediately
     activeKey = activeKey.trim();
 
-    const strictness = config.aiStrictness || 80;
+    const strictLevel = config.aiStrictness || 80;
 
-    let strictInstructions = "";
-    if (strictness >= 90) {
-        strictInstructions = `
-CRITICAL INSTRUCTION (STRICTNESS LEVEL ${strictness}%):
-1. You are a DATABASE ASSISTANT. You are NOT a creative writer.
-2. CHECK [KNOWLEDGE BASE] BELOW FIRST.
-3. IF the user asks about Game Data (Armor, Weapons, Drop Rates, Bosses, Mechanics):
-   - You MUST find the exact answer in [KNOWLEDGE BASE].
-   - IF NOT FOUND IN [KNOWLEDGE BASE]: You MUST say "Этой информации нет в моей базе знаний." OR "Я не знаю этого."
-   - DO NOT USE OUTSIDE INTERNET KNOWLEDGE. DO NOT HALLUCINATE.
-`;
+    // PERSONALITY MAP
+    const personaMap: Record<string, string> = {
+        'helpful': 'Ты полезный помощник Хеликс. Ты вежлив и краток.',
+        'kind': 'Ты очень добрый и милый помощник. Используй уменьшительно-ласкательные слова.',
+        'official': 'Ты строгий официальный бот. Отвечай сухо, по делу, канцеляритом.',
+        'joker': 'Ты стендап-комик. Постоянно шути, даже если это неуместно.',
+        'angry': 'Ты злой бот. Ты ненавидишь отвечать на вопросы, но отвечаешь.',
+        'gopnik': 'Ты гопник с района. Общайся на ты, используй сленг (чё, каво, э слыш).'
+    };
+
+    let sysPrompt = `Role: ${personaMap[config.aiPersonality] || personaMap['helpful']}\nLanguage: Russian.\n`;
+
+    // BEHAVIOR
+    if (config.aiBehavior === 'concise') sysPrompt += "Отвечай максимально коротко (1 предложение).\n";
+    if (config.aiBehavior === 'detailed') sysPrompt += "Отвечай подробно и развернуто.\n";
+
+    // STRICTNESS
+    if (strictLevel >= 90) {
+        sysPrompt += `\nCRITICAL STRICTNESS MODE: 
+        1. YOU MUST ONLY USE INFORMATION FROM THE [DATABASE] BELOW.
+        2. DO NOT use your own internet knowledge about games, items, or stats.
+        3. IF the answer is not in [DATABASE], YOU MUST SAY: "Извините, в моей базе знаний нет информации об этом."
+        4. NEVER HALLUCINATE OR INVENT FACTS.`;
+    } else {
+        sysPrompt += `\nPrioritize [DATABASE]. If not found, use your general knowledge but be concise.`;
     }
 
-    let profanityRule = "";
-    if (config.aiProfanity && config.customProfanityList && config.customProfanityList.length > 0) {
-        profanityRule = `USE THESE WORDS IN YOUR REPLY: ${JSON.stringify(config.customProfanityList)}.`;
+    // PROFANITY & CUSTOM WORDS
+    if (config.aiProfanity) {
+        sysPrompt += `\nMODE: UNFILTERED/PROFANITY.
+        1. You are rude and toxic.
+        2. Use heavy Russian swear words (мат) naturally.
+        3. Do not apologize.`;
+        
+        if (config.customProfanityList && config.customProfanityList.length > 0) {
+            const randomWord = config.customProfanityList[Math.floor(Math.random() * config.customProfanityList.length)];
+            sysPrompt += `\nINSTRUCTION: Try to fit the phrase "${randomWord}" naturally into your response.`;
+        }
+    } else {
+        sysPrompt += `\nNO PROFANITY. BE POLITE.`;
     }
 
-    // UPDATED SYSTEM PROMPT
-    const systemPrompt = `
-Role: ${config.botName || 'Helix'}. 
-Persona: ${config.aiPersonality}. 
-Language: Russian.
-
-CRITICAL EMOJI RULES:
-1. DO NOT use emojis (🙂, 🔥, etc.) in your own generated text.
-2. EXCEPTION: If the [KNOWLEDGE BASE] content contains emojis (including custom Telegram emojis), you MUST preserve them exactly.
-3. If the answer comes from the database, copy it accurately.
-
-${strictInstructions}
-
-${profanityRule}
-
-[KNOWLEDGE BASE]:
-${knowledgeBaseContext}
-`;
+    // EMOJI RULE
+    sysPrompt += `\nEMOJI RULES: Do not add your own emojis. Only copy emojis if they are in the [DATABASE].`;
     
     const messages = [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: sysPrompt + "\n\n[DATABASE]:\n" + knowledgeBaseContext },
         { role: "user", content: question }
     ];
 
