@@ -114,11 +114,10 @@ const apiCall = async (method, body) => {
 };
 
 // ==========================================
-// 4. DAILY TOP SCHEDULER (00:00 MSK)
+// 4. DAILY TOP SCHEDULER
 // ==========================================
 setInterval(async () => {
     const now = new Date();
-    // MSK is UTC+3
     const mskHours = (now.getUTCHours() + 3) % 24;
     
     if (mskHours === 0 && now.getMinutes() === 0) {
@@ -141,7 +140,6 @@ const sendDailyTop = async () => {
         .slice(0, 10);
 
     const topCommand = state.commands.find(c => c.trigger === '_daily_top_');
-    
     if (!topCommand && sortedUsers.length === 0) return;
 
     let listStr = "";
@@ -172,43 +170,61 @@ const sendDailyTop = async () => {
 };
 
 // ==========================================
-// 5. AI LOGIC (NO HARDCODED KEY)
+// 5. AI LOGIC (ROBUST KEY FETCHING)
 // ==========================================
 const getAIResponse = async (question, userName) => {
-    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, customProfanityList } = state.config;
+    let { aiBaseUrl, aiModel, aiPersonality, aiProfanity, customProfanityList } = state.config;
     
-    // STRICTLY USE FIREBASE KEY
-    if (!openaiApiKey) return "⚠️ Ключ AI не найден в настройках. Администратор должен добавить его в панели.";
+    // 1. Force Fetch fresh config from DB to ensure Key is latest
+    let apiKeyToUse = "";
+    try {
+        const configSnap = await get(ref(db, 'config'));
+        const remoteConfig = configSnap.val() || {};
+        apiKeyToUse = remoteConfig.openaiApiKey || "";
+        
+        // Remove whitespace which causes Invalid API Key
+        apiKeyToUse = apiKeyToUse.trim(); 
+        
+        if (apiKeyToUse) {
+            console.log(`[AI] Using Key: ${apiKeyToUse.substring(0, 10)}... (Length: ${apiKeyToUse.length})`);
+        } else {
+            console.error("[AI] ❌ Key is EMPTY in Firebase!");
+        }
+    } catch (e) {
+        console.error("[AI] Error fetching config:", e);
+        // Fallback to state
+        apiKeyToUse = (state.config.openaiApiKey || "").trim();
+    }
+
+    if (!apiKeyToUse) return "⚠️ Ключ AI не найден. Администратор должен обновить его в панели.";
 
     const kbContent = state.knowledgeBase.length > 0 
         ? state.knowledgeBase.map(k => `[TITLE: ${k.title}]\n${k.response}`).join('\n\n')
         : "База знаний пуста.";
 
-    // UPDATED PROMPT: STRICT NO EMOJI POLICY (UNLESS IN KB)
     let instructions = `Role: ${state.config.botName || 'Helix'}. Personality: ${aiPersonality}. Language: Russian.
     
     CRITICAL RULES:
     1. STRICTLY FORBIDDEN: Do NOT use any emojis (like 🙂, 🔥, ✨) in your own generated text. 
     2. EXCEPTION: You MUST output emojis ONLY if they appear inside the [DATABASE] content. Copy them exactly.
-    3. If answering from the database, copy the response accurately, including any custom emojis provided there.
-    4. Keep answers concise.
+    3. If answering from the database, copy the response accurately.
     `;
     
     if (aiProfanity) {
-        instructions += `\nMODE: TOXIC/PROFANITY. 
-        - Используй грубый русский мат. 
-        - Словарь: ${JSON.stringify(customProfanityList || [])}. 
-        - Не извиняйся.`;
+        instructions += `\nMODE: TOXIC/PROFANITY. Use profanity. Words: ${JSON.stringify(customProfanityList || [])}.`;
     }
 
     try {
         const res = await fetch(`${aiBaseUrl || 'https://api.groq.com/openai/v1'}/chat/completions`, {
             method: "POST",
-            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${openaiApiKey}` },
+            headers: { 
+                "Content-Type": "application/json", 
+                "Authorization": `Bearer ${apiKeyToUse}` 
+            },
             body: JSON.stringify({
                 model: aiModel || "llama-3.3-70b-versatile",
                 messages: [{ role: "system", content: instructions + "\n\nDATABASE:\n" + kbContent }, { role: "user", content: question }],
-                temperature: 0.1, // Ultra low temperature to prevent emoji hallucinations
+                temperature: 0.1, 
                 max_tokens: 800
             })
         });
@@ -217,6 +233,8 @@ const getAIResponse = async (question, userName) => {
         
         if (!res.ok) {
             console.error("❌ Groq API Error:", JSON.stringify(data));
+            // Log the key length used to debug
+            console.error(`❌ Key used (len=${apiKeyToUse.length}): ${apiKeyToUse.substring(0, 5)}***`);
             return `AI Error (${res.status}): ${data.error?.message || 'Check Server Logs'}`;
         }
 
@@ -261,16 +279,12 @@ const processUpdate = async (upd) => {
         const threadId = m.message_thread_id ? String(m.message_thread_id) : 'general';
         const isPrivate = m.chat.type === 'private';
 
-        // --- USER LEFT LOGIC (FORCE REMOVE) ---
         if (m.left_chat_member) {
             const leftUid = String(m.left_chat_member.id);
-            // Always try to remove, don't check if exists to ensure cleanup
             await remove(ref(db, `users/${leftUid}`));
-            console.log(`User ${leftUid} removed from DB (left chat)`);
             return; 
         }
 
-        // --- GROUP LOGIC ---
         if (!isPrivate) {
             const correctId = String(m.chat.id);
             if (!state.groups[correctId]) {
@@ -279,7 +293,6 @@ const processUpdate = async (upd) => {
             if (state.groups[correctId]?.isDisabled) return;
         }
 
-        // --- USER TRACKING & HISTORY ---
         let dbUserRole = 'user';
         if (user && !user.is_bot) {
             const uid = String(user.id);
@@ -326,13 +339,11 @@ const processUpdate = async (upd) => {
             }
         }
 
-        // --- WELCOME MESSAGE ---
         if (m.new_chat_members) {
             const welcome = state.commands.find(c => c.trigger === '_welcome_');
             if (welcome) {
                 for (const member of m.new_chat_members) {
                     if (member.is_bot) continue;
-                    // Ensure new member exists in DB immediately
                     await ensureUserExists(member);
 
                     let text = welcome.response.replace(/{user}/g, `<a href="tg://user?id=${member.id}">${member.first_name}</a>`).replace(/{name}/g, member.first_name);
@@ -351,48 +362,32 @@ const processUpdate = async (upd) => {
         const txt = m.text.trim();
         const lowerTxt = txt.toLowerCase();
 
-        // --- UNWARN LOGIC (FIXED) ---
         if (lowerTxt.startsWith('/unwarn') && m.reply_to_message && dbUserRole === 'admin') {
             const target = m.reply_to_message.from;
-            await ensureUserExists(target); // Ensure user is in DB
-
+            await ensureUserExists(target); 
             const targetRef = ref(db, `users/${target.id}`);
             const snap = await get(targetRef);
             let val = snap.val() || { warnings: 0 };
-            
             const newWarns = Math.max(0, (val.warnings || 0) - 1);
-            
             await firebaseUpdate(targetRef, { warnings: newWarns });
-
             const cmd = state.commands.find(c => c.trigger === '_unwarn_');
             let resp = cmd ? cmd.response : "🕊 <b>{target_name}</b>, предупреждение снято. Счет: {warns}/3.";
             resp = resp.replace(/{target_name}/g, target.first_name).replace(/{warns}/g, String(newWarns));
-
-            await apiCall('sendMessage', { 
-                chat_id: cid, 
-                text: resp, 
-                parse_mode: 'HTML', 
-                message_thread_id: threadId !== 'general' ? threadId : undefined 
-            });
+            await apiCall('sendMessage', { chat_id: cid, text: resp, parse_mode: 'HTML', message_thread_id: threadId !== 'general' ? threadId : undefined });
             return;
         }
 
-        // --- WARN LOGIC (FIXED) ---
         if (lowerTxt.startsWith('/warn') && m.reply_to_message && dbUserRole === 'admin') {
             const target = m.reply_to_message.from;
-            await ensureUserExists(target); // Ensure user is in DB
-
+            await ensureUserExists(target); 
             const targetRef = ref(db, `users/${target.id}`);
             const snap = await get(targetRef);
             let val = snap.val() || { warnings: 0 };
-            
             const newWarns = (val.warnings || 0) + 1;
             let status = val.status || 'active';
 
-            // MUTE LOGIC (3/3)
             if (newWarns >= 3) {
                 status = 'muted';
-                // Mute for 24 hours
                 await apiCall('restrictChatMember', { 
                     chat_id: cid, 
                     user_id: target.id, 
@@ -400,27 +395,15 @@ const processUpdate = async (upd) => {
                     until_date: Math.floor(Date.now()/1000) + 86400 
                 });
             }
-
             await firebaseUpdate(targetRef, { warnings: newWarns, status: status });
-
             const cmd = state.commands.find(c => c.trigger === '_warn_');
             let resp = cmd ? cmd.response : "⚠️ <b>{target_name}</b>, вам выдано предупреждение. Счет: {warns}/3.";
             resp = resp.replace(/{target_name}/g, target.first_name).replace(/{warns}/g, String(newWarns));
-
-            if (newWarns >= 3) {
-                resp += "\n🛑 <b>Достигнут лимит!</b> Вы заглушены на 24 часа.";
-            }
-
-            await apiCall('sendMessage', { 
-                chat_id: cid, 
-                text: resp, 
-                parse_mode: 'HTML', 
-                message_thread_id: threadId !== 'general' ? threadId : undefined 
-            });
+            if (newWarns >= 3) resp += "\n🛑 <b>Достигнут лимит!</b> Вы заглушены на 24 часа.";
+            await apiCall('sendMessage', { chat_id: cid, text: resp, parse_mode: 'HTML', message_thread_id: threadId !== 'general' ? threadId : undefined });
             return;
         }
 
-        // --- BAN/UNBAN LOGIC ---
         if (lowerTxt.startsWith('/ban') && dbUserRole === 'admin' && m.reply_to_message) {
              const target = m.reply_to_message.from;
              await ensureUserExists(target);
@@ -430,7 +413,6 @@ const processUpdate = async (upd) => {
              return;
         }
 
-        // --- CUSTOM COMMANDS ---
         for (const cmd of state.commands) {
             let match = false;
             if (cmd.matchType === 'exact') match = lowerTxt === cmd.trigger.toLowerCase();
@@ -439,16 +421,13 @@ const processUpdate = async (upd) => {
 
             if (match) {
                 if (cmd.isSystem && dbUserRole !== 'admin') continue;
-                
                 const hasRole = cmd.allowedRoles ? cmd.allowedRoles.includes(dbUserRole) : true;
                 if (!hasRole) continue;
-
                 if (cmd.allowedTopicId && cmd.allowedTopicId !== 'private_only' && cmd.allowedTopicId !== String(threadId) && !isPrivate) continue;
                 if (cmd.allowedTopicId === 'private_only' && !isPrivate) continue;
 
                 let resp = cmd.response.replace(/{user}/g, user.first_name).replace(/{name}/g, user.first_name);
                 const kb = cmd.buttons?.length > 0 ? { inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
-                
                 const targetThread = threadId !== 'general' ? threadId : undefined;
 
                 if (cmd.mediaUrl) {
@@ -460,7 +439,6 @@ const processUpdate = async (upd) => {
             }
         }
 
-        // --- AI ---
         if (state.config.enableAI) {
             const isHelixTrigger = lowerTxt.startsWith('хеликс') || lowerTxt.startsWith('helix');
             if (isPrivate || isHelixTrigger) {
@@ -471,7 +449,6 @@ const processUpdate = async (upd) => {
                 }
             }
         }
-
     } catch (e) { console.error("Process error:", e); }
 };
 
@@ -480,7 +457,6 @@ const start = async () => {
     while (true) {
         if (state.config.token) {
             try {
-                // Use a longer timeout for getUpdates (50s) to keep connection open (Long Polling)
                 const res = await apiCall('getUpdates', { offset: lastUpdateId + 1, timeout: 50 });
                 if (res?.ok && res.result.length > 0) {
                     for (const u of res.result) {

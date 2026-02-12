@@ -89,7 +89,13 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     };
     
     const handleSave = (section: 'ai' | 'ban') => {
-        saveData('config', config);
+        // Ensure we save clean key
+        const cleanConfig = { ...config };
+        if (cleanConfig.openaiApiKey) {
+            cleanConfig.openaiApiKey = cleanConfig.openaiApiKey.trim();
+        }
+        
+        saveData('config', cleanConfig);
         setAiSaveStatus('Сохранено!');
         if (addLog) addLog('Настройки', `Обновлены настройки ${section === 'ai' ? 'AI' : 'Бан-лист'}`, 'info');
         setTimeout(() => setAiSaveStatus(''), 2000);
@@ -252,6 +258,22 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                     
                     <div className="space-y-6 relative z-10 flex-1 overflow-y-auto custom-scrollbar pr-2 pb-20">
+                        
+                        {/* API KEY INPUT */}
+                        <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
+                             <label className="text-xs text-gray-400 font-bold uppercase mb-2 block flex items-center gap-2">
+                                <Icons.Settings size={14}/> API Key (Groq/OpenAI)
+                             </label>
+                             <input 
+                                value={config.openaiApiKey || ''}
+                                onChange={e => setConfig({...config, openaiApiKey: e.target.value})}
+                                type="password"
+                                placeholder="gsk_..."
+                                className="w-full bg-black border border-gray-600 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none"
+                             />
+                             <p className="text-[10px] text-gray-500 mt-1">Осторожно: Это ключ для доступа к AI. Не показывайте его никому.</p>
+                        </div>
+
                         <div>
                             <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Модель AI (Ядро)</label>
                             <select value={config.aiModel || 'llama-3.3-70b-versatile'} onChange={e => setConfig({...config, aiModel: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">

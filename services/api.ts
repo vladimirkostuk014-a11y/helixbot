@@ -38,7 +38,7 @@ const performAiRequest = async (apiKey: string, config: BotConfig, messages: any
         method: "POST",
         headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${apiKey}`
+            "Authorization": `Bearer ${apiKey.trim()}`
         },
         body: JSON.stringify({
             model: config.aiModel || "llama-3.3-70b-versatile",
@@ -53,6 +53,9 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
     let activeKey = config.openaiApiKey;
 
     if (!activeKey) return "⚠️ Ключ AI не найден. Настройте его в панели.";
+    
+    // Clean key immediately
+    activeKey = activeKey.trim();
 
     const strictness = config.aiStrictness || 80;
 
