@@ -175,6 +175,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     user.history.forEach(msg => {
                         if (!msg.timestamp) return;
                         const d = new Date(msg.timestamp);
+                        // Filter: Must be in current month/year AND be a group message
                         if (d.getFullYear() === year && d.getMonth() === month && msg.isGroup) {
                             const key = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
                             const entry = dataMap.get(key);
@@ -405,7 +406,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         );
     }
     
-    // ... Rest of Dashboard logic
+    // ... Rest of Dashboard logic (KPICards, Charts render)
     return (
         <div className="space-y-8 relative">
             {/* KPI Cards */}
@@ -498,7 +499,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                 </div>
             </div>
 
-            {/* Existing Modals code... (Active, Groups, AI Stats) */}
+            {/* Existing Modals code... (Active, Groups, AI Stats) same as before */}
             {showActiveModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowActiveModal(false)}>
                     <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl p-6 animate-slideIn" onClick={e => e.stopPropagation()}>
