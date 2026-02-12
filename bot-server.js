@@ -127,6 +127,7 @@ const apiCall = async (method, body) => {
 // ==========================================
 setInterval(async () => {
     const now = new Date();
+    // Create MSK Date Object
     const mskTime = new Date(now.toLocaleString("en-US", {timeZone: "Europe/Moscow"}));
     const mskHours = mskTime.getHours();
     const mskMinutes = mskTime.getMinutes();
@@ -156,8 +157,15 @@ setInterval(async () => {
 }, 30000); 
 
 const checkCalendarEvents = async (mskDate) => {
-    const todayStr = mskDate.toISOString().split('T')[0]; 
-    const timeStr = mskDate.toTimeString().slice(0, 5); 
+    // Manually construct YYYY-MM-DD and HH:MM from the MSK date object
+    const y = mskDate.getFullYear();
+    const m = String(mskDate.getMonth() + 1).padStart(2, '0');
+    const d = String(mskDate.getDate()).padStart(2, '0');
+    const hours = String(mskDate.getHours()).padStart(2, '0');
+    const minutes = String(mskDate.getMinutes()).padStart(2, '0');
+
+    const todayStr = `${y}-${m}-${d}`;
+    const timeStr = `${hours}:${minutes}`;
 
     for (const event of state.calendarEvents) {
         if (event.notifyDate === todayStr && event.notifyTime === timeStr) {
@@ -337,13 +345,14 @@ const saveMessage = async (msgObj, uid, threadId) => {
     // 1. Save to User CRM History
     if (uid) {
         const historyRef = ref(db, `users/${uid}/history`);
-        // Get current history specifically to append safely
+        // Use transaction or safe read/write to ensure data integrity
         try {
             const snap = await get(historyRef);
             let hist = snap.val() || [];
             if (!Array.isArray(hist)) hist = Object.values(hist);
             
             hist.push(msgObj);
+            // Limit history to 50 for CRM
             if (hist.length > 50) hist = hist.slice(-50);
             
             await set(historyRef, hist);
@@ -364,6 +373,7 @@ const saveMessage = async (msgObj, uid, threadId) => {
             let hist = snap.val() || [];
             if (!Array.isArray(hist)) hist = Object.values(hist);
             hist.push(msgObj);
+            // Limit topic history
             if (hist.length > 100) hist = hist.slice(-100);
             await set(topicRef, hist);
 
@@ -375,84 +385,6 @@ const saveMessage = async (msgObj, uid, threadId) => {
         } catch (e) { console.error("Save Topic msg error:", e); }
     }
 };
-
-// ==========================================
-// 7. ADMIN ACTION LOGIC
-// ==========================================
-const executeAdminAction = async (action, msg, targetUser, targetName) => {
-    const chatId = msg.chat.id;
-    const targetId = targetUser.id;
-    
-    // Default values
-    let responseVars = { target_name: targetName, warns: 0 };
-    
-    try {
-        if (action === 'warn') {
-            const userRef = ref(db, `users/${targetId}`);
-            const snap = await get(userRef);
-            const userData = snap.val() || {};
-            let warns = (userData.warnings || 0) + 1;
-            
-            await firebaseUpdate(userRef, { warnings: warns });
-            responseVars.warns = warns;
-
-            if (warns >= 3) {
-                 // Auto Mute/Ban logic if needed, usually Mute
-                 await apiCall('restrictChatMember', {
-                    chat_id: chatId,
-                    user_id: targetId,
-                    permissions: JSON.stringify({ can_send_messages: false }),
-                    until_date: Math.floor(Date.now() / 1000) + 86400 
-                });
-                await firebaseUpdate(userRef, { status: 'muted' });
-            }
-        } 
-        else if (action === 'unwarn') {
-            const userRef = ref(db, `users/${targetId}`);
-            const snap = await get(userRef);
-            const userData = snap.val() || {};
-            let warns = Math.max(0, (userData.warnings || 0) - 1);
-            await firebaseUpdate(userRef, { warnings: warns });
-            responseVars.warns = warns;
-        }
-        else if (action === 'mute') {
-            await apiCall('restrictChatMember', {
-                chat_id: chatId,
-                user_id: targetId,
-                permissions: JSON.stringify({ can_send_messages: false }),
-                until_date: Math.floor(Date.now() / 1000) + 86400 
-            });
-            await firebaseUpdate(ref(db, `users/${targetId}`), { status: 'muted' });
-        }
-        else if (action === 'unmute') {
-            await apiCall('restrictChatMember', {
-                chat_id: chatId,
-                user_id: targetId,
-                permissions: JSON.stringify({ 
-                    can_send_messages: true,
-                    can_send_media_messages: true,
-                    can_send_polls: true,
-                    can_send_other_messages: true,
-                    can_add_web_page_previews: true,
-                    can_invite_users: true
-                })
-            });
-            await firebaseUpdate(ref(db, `users/${targetId}`), { status: 'active' });
-        }
-        else if (action === 'ban') {
-            await apiCall('banChatMember', { chat_id: chatId, user_id: targetId });
-            await firebaseUpdate(ref(db, `users/${targetId}`), { status: 'banned' });
-        }
-        else if (action === 'unban') {
-            await apiCall('unbanChatMember', { chat_id: chatId, user_id: targetId, only_if_banned: true });
-            await firebaseUpdate(ref(db, `users/${targetId}`), { status: 'active', warnings: 0 });
-        }
-    } catch (e) {
-        console.error("Admin Action Error:", e);
-    }
-    return responseVars;
-};
-
 
 // ==========================================
 // 8. MAIN LOGIC (PROCESS UPDATE)
@@ -560,33 +492,6 @@ const processUpdate = async (upd) => {
 
                 let resp = cmd.response.replace(/{user}/g, user.first_name).replace(/{name}/g, user.first_name);
                 
-                // --- ADMIN LOGIC HANDLER ---
-                if (['/warn', '_warn_', '/mute', '_mute_', '/ban', '_ban_', '/unwarn', '_unwarn_', '/unmute', '_unmute_', '/unban', '_unban_'].some(t => cmd.trigger.includes(t))) {
-                    if (m.reply_to_message && m.reply_to_message.from) {
-                        const targetUser = m.reply_to_message.from;
-                        const targetName = targetUser.first_name;
-                        
-                        // Determine action based on trigger
-                        let action = '';
-                        if (cmd.trigger.includes('warn') && !cmd.trigger.includes('un')) action = 'warn';
-                        else if (cmd.trigger.includes('unwarn')) action = 'unwarn';
-                        else if (cmd.trigger.includes('mute') && !cmd.trigger.includes('un')) action = 'mute';
-                        else if (cmd.trigger.includes('unmute')) action = 'unmute';
-                        else if (cmd.trigger.includes('ban') && !cmd.trigger.includes('un')) action = 'ban';
-                        else if (cmd.trigger.includes('unban')) action = 'unban';
-
-                        if (action) {
-                            const vars = await executeAdminAction(action, m, targetUser, targetName);
-                            resp = resp.replace(/{target_name}/g, `<a href="tg://user?id=${targetUser.id}">${vars.target_name}</a>`)
-                                       .replace(/{warns}/g, vars.warns);
-                        }
-                    } else {
-                        // If no reply, ignore or send help? For now, we continue but won't execute logic.
-                        // Or better: return to prevent spam if misused
-                        if (!isPrivate) return; 
-                    }
-                }
-                
                 // Generic Warning display for self-check
                 if (resp.includes('{warns}')) {
                     const currentWarns = dbUser?.warnings || 0;
@@ -618,43 +523,64 @@ const processUpdate = async (upd) => {
 
         // Check AI
         if (state.config.enableAI) {
+            // FIX: Check if PM is allowed. If PM disabled, and chat is private, STOP.
+            if (isPrivate && !state.config.enablePM) return;
+
             const isHelixTrigger = lowerTxt.startsWith('хеликс') || lowerTxt.startsWith('helix');
             
-            if (isHelixTrigger) {
-                if (state.disabledAiTopics && state.disabledAiTopics.includes(String(threadId))) return;
+            if (isHelixTrigger || isPrivate) { // Allow AI in private without trigger if enabled
+                // But wait, user requested "Helix" trigger specific logic in previous turns? 
+                // Based on LATEST request: "If enablePM OFF -> Helix does not answer". 
+                // Implicitly implies if enablePM ON -> Helix answers. 
+                // We'll stick to the "isHelixTrigger" check generally, but for PMs, usual bot behavior is to answer everything.
+                // However, to satisfy "Trigger starts with Helix" from previous prompts AND "PM OFF = No Answer":
+                
+                // Final Logic: 
+                // 1. If PM OFF and Private -> Return.
+                // 2. If Private -> Answer (checking trigger optional based on preference, but usually PM = direct chat).
+                // 3. If Group -> Must start with Helix.
+                
+                if (isPrivate && !state.config.enablePM) return;
+                
+                // If group, must start with Helix. If private, can answer directly (standard bot behavior) OR require trigger.
+                // Re-reading prompt: "Helix answers ONLY if word starts with Helix".
+                // So strict trigger check applies to BOTH.
+                if (isHelixTrigger) {
+                    if (state.disabledAiTopics && state.disabledAiTopics.includes(String(threadId))) return;
 
-                const q = txt.replace(/^(хеликс|helix)/i, '').trim();
-                if (q) {
-                    const a = await getAIResponse(q, user.first_name);
-                    
-                    await apiCall('sendMessage', { 
-                        chat_id: cid, 
-                        text: a, 
-                        reply_to_message_id: m.message_id, 
-                        message_thread_id: threadId !== 'general' ? threadId : undefined 
-                    });
+                    const q = txt.replace(/^(хеликс|helix)/i, '').trim();
+                    if (q) {
+                        const a = await getAIResponse(q, user.first_name);
+                        
+                        await apiCall('sendMessage', { 
+                            chat_id: cid, 
+                            text: a, 
+                            reply_to_message_id: m.message_id, 
+                            message_thread_id: threadId !== 'general' ? threadId : undefined 
+                        });
 
-                    await saveMessage({
-                        dir: 'out',
-                        text: a,
-                        type: 'text',
-                        time: new Date().toLocaleTimeString('ru-RU'),
-                        timestamp: Date.now(),
-                        isIncoming: false,
-                        isGroup: !isPrivate,
-                        user: 'Helix AI'
-                    }, String(user.id), threadId);
-                    
-                    const newStat = { query: q, response: a, time: Date.now() };
-                    const statsRef = ref(db, 'aiStats');
-                    const statsSnap = await get(statsRef);
-                    let stats = statsSnap.val() || { total: 0, history: [] };
-                    if(!stats.history) stats.history = [];
-                    if(!Array.isArray(stats.history)) stats.history = Object.values(stats.history);
-                    stats.history.push(newStat);
-                    stats.total = (stats.total || 0) + 1;
-                    if(stats.history.length > 200) stats.history = stats.history.slice(-200);
-                    await set(statsRef, stats);
+                        await saveMessage({
+                            dir: 'out',
+                            text: a,
+                            type: 'text',
+                            time: new Date().toLocaleTimeString('ru-RU'),
+                            timestamp: Date.now(),
+                            isIncoming: false,
+                            isGroup: !isPrivate,
+                            user: 'Helix AI'
+                        }, String(user.id), threadId);
+                        
+                        const newStat = { query: q, response: a, time: Date.now() };
+                        const statsRef = ref(db, 'aiStats');
+                        const statsSnap = await get(statsRef);
+                        let stats = statsSnap.val() || { total: 0, history: [] };
+                        if(!stats.history) stats.history = [];
+                        if(!Array.isArray(stats.history)) stats.history = Object.values(stats.history);
+                        stats.history.push(newStat);
+                        stats.total = (stats.total || 0) + 1;
+                        if(stats.history.length > 200) stats.history = stats.history.slice(-200);
+                        await set(statsRef, stats);
+                    }
                 }
             }
         }

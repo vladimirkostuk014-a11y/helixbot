@@ -157,12 +157,14 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         const today = new Date();
         const data = [];
         
+        // Loop last 7 days
         for (let i = 6; i >= 0; i--) {
             const d = new Date(today);
             d.setDate(today.getDate() - i);
+            d.setHours(0,0,0,0); // normalize time
             const label = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
             
-            // Count User Messages (Group only as requested)
+            // Count User Messages (Group & PM)
             let msgCount = 0;
             if (users) {
                 Object.values(users).forEach(u => {
@@ -170,7 +172,9 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                         u.history.forEach(m => {
                             if (!m.timestamp) return;
                             const msgDate = new Date(m.timestamp);
-                            if (msgDate.getDate() === d.getDate() && msgDate.getMonth() === d.getMonth() && m.isGroup) {
+                            msgDate.setHours(0,0,0,0);
+                            
+                            if (msgDate.getTime() === d.getTime()) {
                                 msgCount++;
                             }
                         });
@@ -183,7 +187,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
             if (aiStats && aiStats.history) {
                 aiStats.history.forEach(stat => {
                     const statDate = new Date(stat.time);
-                     if (statDate.getDate() === d.getDate() && statDate.getMonth() === d.getMonth()) {
+                    statDate.setHours(0,0,0,0);
+                     if (statDate.getTime() === d.getTime()) {
                         aiCount++;
                      }
                 });
@@ -417,7 +422,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                     cursor={{fill: '#27272a'}}
                                 />
                                 <Legend wrapperStyle={{paddingTop: '20px'}}/>
-                                <Bar dataKey="users" name="Сообщения в группе" fill="#3B82F6" radius={[4, 4, 0, 0]} barSize={30} />
+                                <Bar dataKey="users" name="Все сообщения" fill="#3B82F6" radius={[4, 4, 0, 0]} barSize={30} />
                                 <Bar dataKey="ai" name="Ответы AI" fill="#8B5CF6" radius={[4, 4, 0, 0]} barSize={30} />
                             </BarChart>
                         </ResponsiveContainer>

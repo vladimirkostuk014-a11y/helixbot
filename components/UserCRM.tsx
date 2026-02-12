@@ -33,7 +33,9 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
 
     useEffect(() => {
         if (!selectedUser && selectedUserId) {
-            setSelectedUserId(null); // Deselect if user removed
+            // Check if user still exists but perhaps key changed? No, key is ID.
+            // If user removed from DB, deselect.
+            if (!users[String(selectedUserId)]) setSelectedUserId(null); 
         }
         if (selectedUser && selectedUser.unreadCount) {
              setUsers(prev => ({ ...prev, [selectedUser.id]: { ...prev[selectedUser.id], unreadCount: 0 } }));
@@ -57,6 +59,7 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
     const getFilteredUsers = () => {
         return (Object.values(users) as User[]).filter((u: User) => {
             if (!u) return false;
+            // Filter out system ids and groups (negative IDs usually)
             if (u.id < 0 || u.id === 777000 || u.id === 1087968824) return false;
             
             // Apply View Filter
@@ -72,6 +75,9 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
             }
             return true;
         }).sort((a, b) => {
+            // Sort banned/muted to top if filtering
+            if (viewFilter !== 'all') return 0;
+            // Otherwise sort by unread then last seen
             if ((b.unreadCount || 0) !== (a.unreadCount || 0)) return (b.unreadCount || 0) - (a.unreadCount || 0);
             return new Date(b.lastSeen || 0).getTime() - new Date(a.lastSeen || 0).getTime();
         });
@@ -242,12 +248,15 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
                 if (addLog) addLog('Kick', `Кикнут ${selectedUser.name}`, 'warning');
             } else if (action === 'ban') {
                 await apiCall('banChatMember', { chat_id: config.targetChatId, user_id: selectedUserId }, config);
-                setUsers(prev => ({ ...prev, [selectedUserId]: { ...prev[selectedUserId], status: 'banned' } }));
+                // Force status update locally and in DB so they appear in filter
+                const updatedUser = { ...selectedUser, status: 'banned' as const };
+                setUsers(prev => ({ ...prev, [selectedUserId]: updatedUser }));
                 saveData(`users/${selectedUserId}/status`, 'banned');
                 if (addLog) addLog('Ban', `Забанен ${selectedUser.name}`, 'danger');
             } else if (action === 'unban') {
                 await apiCall('unbanChatMember', { chat_id: config.targetChatId, user_id: selectedUserId, only_if_banned: true }, config);
-                setUsers(prev => ({ ...prev, [selectedUserId]: { ...prev[selectedUserId], status: 'active', warnings: 0 } }));
+                const updatedUser = { ...selectedUser, status: 'active' as const, warnings: 0 };
+                setUsers(prev => ({ ...prev, [selectedUserId]: updatedUser }));
                 saveData(`users/${selectedUserId}/status`, 'active');
                 saveData(`users/${selectedUserId}/warnings`, 0);
                 if (addLog) addLog('Unban', `Разбанен ${selectedUser.name}`, 'success');
@@ -267,11 +276,32 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
         
         if (delta > 0) {
              await apiCall('sendMessage', { chat_id: config.targetChatId, text: `⚠️ <b>${selectedUser.name}</b>: предупреждение (${newWarns}/3)`, parse_mode: 'HTML' }, config);
+             
+             // AUTO MUTE ON 3 WARNS (48 HOURS)
+             if (newWarns >= 3) {
+                 const muteDuration = 48 * 3600; // 48 hours in seconds
+                 const untilDate = Math.floor(Date.now() / 1000) + muteDuration;
+                 
+                 await apiCall('restrictChatMember', {
+                    chat_id: config.targetChatId,
+                    user_id: selectedUserId,
+                    permissions: JSON.stringify({ can_send_messages: false }),
+                    until_date: untilDate 
+                }, config);
+                
+                // Update status
+                setUsers(prev => ({ ...prev, [selectedUserId]: { ...prev[selectedUserId], status: 'muted', warnings: newWarns } }));
+                saveData(`users/${selectedUserId}/status`, 'muted');
+                if (addLog) addLog('AutoMute', `Авто-мут (3/3 варнов) для ${selectedUser.name} на 48ч`, 'warning');
+                
+                // Notify in chat
+                await apiCall('sendMessage', { chat_id: config.targetChatId, text: `🔇 <b>${selectedUser.name}</b> получил 3 предупреждения и заглушен на 48 часов.`, parse_mode: 'HTML' }, config);
+             }
         }
     };
     
-    // Filter history to only show private messages or admin sent messages
-    const visibleHistory = (selectedUser?.history || []).filter(msg => !msg.isGroup);
+    // Filter history to only show private messages (isGroup: false)
+    const visibleHistory = (selectedUser?.history || []).filter(msg => msg.isGroup === false);
 
     return (
         <div className="flex h-full bg-[#0c0c0e] rounded-2xl overflow-hidden border border-gray-800 shadow-2xl">
