@@ -31,8 +31,6 @@ export const apiCall = async (method: string, body: any = {}, config: BotConfig,
     }
 };
 
-const DEFAULT_AI_KEY = "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";
-
 const performAiRequest = async (apiKey: string, config: BotConfig, messages: any[]) => {
     const baseUrl = config.aiBaseUrl || 'https://api.groq.com/openai/v1';
     
@@ -52,9 +50,9 @@ const performAiRequest = async (apiKey: string, config: BotConfig, messages: any
 };
 
 export const getAIResponse = async (question: string, config: BotConfig, knowledgeBaseContext: string) => {
-    let activeKey = config.openaiApiKey || DEFAULT_AI_KEY;
+    let activeKey = config.openaiApiKey;
 
-    if (!activeKey) return "⚠️ Ключ AI не найден.";
+    if (!activeKey) return "⚠️ Ключ AI не найден. Настройте его в панели.";
 
     const strictness = config.aiStrictness || 80;
 
@@ -102,13 +100,6 @@ ${knowledgeBaseContext}
 
     try {
         let response = await performAiRequest(activeKey, config, messages);
-
-        // Retry logic for frontend as well
-        if (response.status === 401 && activeKey !== DEFAULT_AI_KEY) {
-            console.log("⚠️ Frontend AI Auth Failed (401). Retrying with Fallback Key...");
-            activeKey = DEFAULT_AI_KEY;
-            response = await performAiRequest(activeKey, config, messages);
-        }
 
         if (response.status === 429) {
             return "Слишком много запросов. Дайте мне передохнуть минуту.";

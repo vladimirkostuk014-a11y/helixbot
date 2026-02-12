@@ -22,8 +22,6 @@ const HARDCODED_CONFIG = {
     adminIds: '8098674553'
 };
 
-const GROQ_API_KEY = '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';
-
 const toArray = <T,>(data: any): T[] => {
     if (!data) return [];
     if (Array.isArray(data)) return data;
@@ -52,7 +50,7 @@ const App = () => {
         enableAutoTop: true, 
         enablePM: true, 
         enableCalendarAlerts: true,
-        openaiApiKey: GROQ_API_KEY, 
+        openaiApiKey: '', // Empty by default, fetched from Firebase
         aiBaseUrl: 'https://api.groq.com/openai/v1', 
         aiModel: 'llama-3.3-70b-versatile', 
         aiPersonality: 'helpful', 

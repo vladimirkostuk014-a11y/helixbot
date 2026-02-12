@@ -20,9 +20,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-// HARDCODED FALLBACK KEY (PROVIDED BY USER)
-const DEFAULT_AI_KEY = "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";
-
 let state = {
     config: {},
     users: {},
@@ -175,27 +172,13 @@ const sendDailyTop = async () => {
 };
 
 // ==========================================
-// 5. AI LOGIC (WITH RETRY)
+// 5. AI LOGIC (NO HARDCODED KEY)
 // ==========================================
-const performAiRequest = async (apiKey, model, messages, temperature) => {
-    const { aiBaseUrl } = state.config;
-    return await fetch(`${aiBaseUrl || 'https://api.groq.com/openai/v1'}/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-        body: JSON.stringify({
-            model: model || "llama-3.3-70b-versatile",
-            messages: messages,
-            temperature: temperature,
-            max_tokens: 800
-        })
-    });
-};
-
 const getAIResponse = async (question, userName) => {
-    let { openaiApiKey, aiModel, aiPersonality, aiProfanity, customProfanityList } = state.config;
+    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, customProfanityList } = state.config;
     
-    // Default to provided key if config is missing
-    let activeKey = openaiApiKey || DEFAULT_AI_KEY;
+    // STRICTLY USE FIREBASE KEY
+    if (!openaiApiKey) return "⚠️ Ключ AI не найден в настройках. Администратор должен добавить его в панели.";
 
     const kbContent = state.knowledgeBase.length > 0 
         ? state.knowledgeBase.map(k => `[TITLE: ${k.title}]\n${k.response}`).join('\n\n')
@@ -218,25 +201,23 @@ const getAIResponse = async (question, userName) => {
         - Не извиняйся.`;
     }
 
-    const messages = [{ role: "system", content: instructions + "\n\nDATABASE:\n" + kbContent }, { role: "user", content: question }];
-    const temperature = 0.1;
-
     try {
-        // Attempt 1: Try with active key
-        let res = await performAiRequest(activeKey, aiModel, messages, temperature);
-        
-        // RETRY LOGIC: If 401 (Auth Error) and we haven't tried fallback yet
-        if (res.status === 401 && activeKey !== DEFAULT_AI_KEY) {
-            console.log("⚠️ AI Auth Failed (401). Retrying with Fallback Key...");
-            activeKey = DEFAULT_AI_KEY;
-            res = await performAiRequest(activeKey, aiModel, messages, temperature);
-        }
+        const res = await fetch(`${aiBaseUrl || 'https://api.groq.com/openai/v1'}/chat/completions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${openaiApiKey}` },
+            body: JSON.stringify({
+                model: aiModel || "llama-3.3-70b-versatile",
+                messages: [{ role: "system", content: instructions + "\n\nDATABASE:\n" + kbContent }, { role: "user", content: question }],
+                temperature: 0.1, // Ultra low temperature to prevent emoji hallucinations
+                max_tokens: 800
+            })
+        });
 
         const data = await res.json();
         
         if (!res.ok) {
             console.error("❌ Groq API Error:", JSON.stringify(data));
-            return `AI Error (${res.status}): ${data.error?.message || 'Unknown'}`;
+            return `AI Error (${res.status}): ${data.error?.message || 'Check Server Logs'}`;
         }
 
         return data.choices?.[0]?.message?.content || "AI Error (Empty).";
