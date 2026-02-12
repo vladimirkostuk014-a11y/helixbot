@@ -17,7 +17,7 @@ interface UserCRMProps {
 const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames = {}, addLog }) => {
     const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
-    const [viewFilter, setViewFilter] = useState<'all' | 'banned' | 'muted'>('all'); // NEW FILTER STATE
+    const [viewFilter, setViewFilter] = useState<'all' | 'banned' | 'muted'>('all'); 
     
     // Chat Inputs
     const [msgText, setMsgText] = useState('');
@@ -28,9 +28,13 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
 
     const chatEndRef = useRef<HTMLDivElement>(null);
     
+    // Ensure selected user exists in current users map
     const selectedUser = selectedUserId !== null ? users[String(selectedUserId)] : null;
 
     useEffect(() => {
+        if (!selectedUser && selectedUserId) {
+            setSelectedUserId(null); // Deselect if user removed
+        }
         if (selectedUser && selectedUser.unreadCount) {
              setUsers(prev => ({ ...prev, [selectedUser.id]: { ...prev[selectedUser.id], unreadCount: 0 } }));
              saveData(`users/${selectedUser.id}/unreadCount`, 0);
@@ -144,8 +148,10 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
                     isGroup: false,
                     user: 'Admin'
                 };
+                // Optimistic update handled by firebase subscription usually, but we update local for speed
                 const updatedHistory = [...(selectedUser.history || []), newMsg];
                 setUsers(prev => ({...prev, [selectedUser.id]: { ...selectedUser, history: updatedHistory }}));
+                // Save logic is in bot-server mostly, but for outgoing admin msg we save here too
                 saveData(`users/${selectedUser.id}/history`, updatedHistory);
                 
                 setMsgText('');
@@ -264,6 +270,7 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
         }
     };
     
+    // Filter history to only show private messages or admin sent messages
     const visibleHistory = (selectedUser?.history || []).filter(msg => !msg.isGroup);
 
     return (

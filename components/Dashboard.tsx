@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { User, AiStats, BotConfig, Group, LogEntry } from '../types';
 import { Icons } from './Icons';
 import { apiCall, getAIResponse } from '../services/api';
@@ -152,56 +152,50 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         saveData('config', newConfig); 
     };
 
-    // --- FIXED ACTIVITY DATA LOGIC ---
-    const getActivityData = () => {
+    // --- SIMPLIFIED BAR CHART LOGIC (Last 7 Days) ---
+    const getSimpleChartData = () => {
         const today = new Date();
-        const year = today.getFullYear();
-        const month = today.getMonth(); 
-        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        const data = [];
         
-        // Prepare Map: "DD.MM" -> Object
-        const dataMap = new Map<string, { date: string, messages: number, ai: number }>();
-        
-        for (let i = 1; i <= daysInMonth; i++) {
-            const d = new Date(year, month, i);
-            const key = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-            dataMap.set(key, { date: key, messages: 0, ai: 0 });
-        }
-        
-        // Iterate Users History
-        if (users) {
-            Object.values(users).forEach(user => {
-                if (user && user.history) {
-                    user.history.forEach(msg => {
-                        if (!msg.timestamp) return;
-                        const d = new Date(msg.timestamp);
-                        // Filter: Must be in current month/year AND be a group message
-                        if (d.getFullYear() === year && d.getMonth() === month && msg.isGroup) {
-                            const key = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-                            const entry = dataMap.get(key);
-                            if (entry) {
-                                entry.messages++;
+        for (let i = 6; i >= 0; i--) {
+            const d = new Date(today);
+            d.setDate(today.getDate() - i);
+            const label = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+            
+            // Count User Messages (Group only as requested)
+            let msgCount = 0;
+            if (users) {
+                Object.values(users).forEach(u => {
+                    if (u.history) {
+                        u.history.forEach(m => {
+                            if (!m.timestamp) return;
+                            const msgDate = new Date(m.timestamp);
+                            if (msgDate.getDate() === d.getDate() && msgDate.getMonth() === d.getMonth() && m.isGroup) {
+                                msgCount++;
                             }
-                        }
-                    });
-                }
-            });
-        }
-        
-        // Iterate AI Stats
-        if (aiStats && aiStats.history) {
-            aiStats.history.forEach(stat => {
-                 const d = new Date(stat.time);
-                 if (d.getFullYear() === year && d.getMonth() === month) {
-                    const key = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-                    const entry = dataMap.get(key);
-                    if (entry) {
-                        entry.ai++;
+                        });
                     }
-                 }
+                });
+            }
+
+            // Count AI Responses
+            let aiCount = 0;
+            if (aiStats && aiStats.history) {
+                aiStats.history.forEach(stat => {
+                    const statDate = new Date(stat.time);
+                     if (statDate.getDate() === d.getDate() && statDate.getMonth() === d.getMonth()) {
+                        aiCount++;
+                     }
+                });
+            }
+
+            data.push({
+                name: label,
+                users: msgCount,
+                ai: aiCount
             });
         }
-        return Array.from(dataMap.values());
+        return data;
     };
 
     const KpiCard = ({ icon: Icon, title, value, color, gradient, onClick, actionIcon: ActionIcon }: any) => (
@@ -263,8 +257,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                     
                     <div className="space-y-6 relative z-10 flex-1 overflow-y-auto custom-scrollbar pr-2 pb-20">
-                        
-                        {/* API KEY INPUT */}
+                        {/* Settings Form Content (Same as before) */}
                         <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
                              <label className="text-xs text-gray-400 font-bold uppercase mb-2 block flex items-center gap-2">
                                 <Icons.Settings size={14}/> API Key (Groq/OpenAI)
@@ -276,11 +269,10 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                 placeholder="gsk_..."
                                 className="w-full bg-black border border-gray-600 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none"
                              />
-                             <p className="text-[10px] text-gray-500 mt-1">Осторожно: Это ключ для доступа к AI. Не показывайте его никому.</p>
                         </div>
 
                         <div>
-                            <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Модель AI (Ядро)</label>
+                            <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Модель AI</label>
                             <select value={config.aiModel || 'llama-3.3-70b-versatile'} onChange={e => setConfig({...config, aiModel: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
                                 <option value="llama-3.3-70b-versatile">🧠 Llama 3.3 70B (Основная)</option>
                                 <option value="llama-3.1-8b-instant">⚡ Llama 3.1 8B (Быстрая)</option>
@@ -289,80 +281,44 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                         
                         <div>
                             <div className="flex justify-between mb-1">
-                                <label className="text-xs text-gray-400 font-bold uppercase block">Точность / Строгость (100% = Только База Знаний)</label>
-                                <span className={`text-xs font-bold ${config.aiStrictness >= 90 ? 'text-green-500' : config.aiStrictness >= 50 ? 'text-yellow-500' : 'text-red-500'}`}>
-                                    {config.aiStrictness || 80}%
-                                </span>
+                                <label className="text-xs text-gray-400 font-bold uppercase block">Точность (80-100%)</label>
+                                <span className={`text-xs font-bold ${config.aiStrictness >= 90 ? 'text-green-500' : 'text-yellow-500'}`}>{config.aiStrictness || 80}%</span>
                             </div>
-                            <input 
-                                type="range" min="0" max="100" step="10"
-                                value={config.aiStrictness || 80} 
-                                onChange={e => setConfig({...config, aiStrictness: parseInt(e.target.value)})}
-                                className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
-                            />
-                            <p className="text-[10px] text-gray-500 mt-1">
-                                90-100% = Бот отвечает <b>только</b> по базе. Если не знает — молчит или говорит, что не знает. <br/>
-                                0-50% = Бот может выдумывать факты из интернета.
-                            </p>
+                            <input type="range" min="0" max="100" step="10" value={config.aiStrictness || 80} onChange={e => setConfig({...config, aiStrictness: parseInt(e.target.value)})} className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"/>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Личность</label>
                                 <select value={config.aiPersonality || 'helpful'} onChange={e => setConfig({...config, aiPersonality: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
-                                    <option value="helpful">😄 Хеликс (Обычный)</option>
+                                    <option value="helpful">😄 Хеликс</option>
                                     <option value="kind">💖 Добряк</option>
                                     <option value="official">🧐 Официальный</option>
                                     <option value="joker">🤡 Шутник</option>
                                     <option value="angry">😡 Злой</option>
-                                    <option value="gopnik">🍺 Гопник (Токсик)</option>
+                                    <option value="gopnik">🍺 Гопник</option>
                                 </select>
                             </div>
                             <div>
-                                <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Длина ответа</label>
+                                <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Ответ</label>
                                 <select value={config.aiBehavior || 'balanced'} onChange={e => setConfig({...config, aiBehavior: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
-                                    <option value="balanced">⚖️ 2-3 предложения</option>
-                                    <option value="concise">⚡ Коротко (1 предл.)</option>
-                                    <option value="detailed">📜 Подробно</option>
+                                    <option value="balanced">⚖️ Обычный</option>
+                                    <option value="concise">⚡ Короткий</option>
+                                    <option value="detailed">📜 Подробный</option>
                                 </select>
                             </div>
                         </div>
 
                         <div className="flex flex-wrap gap-4">
-                            <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-gray-900/50 border border-gray-700 hover:border-red-500/50 transition-colors">
+                            <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-gray-900/50 border border-gray-700">
                                 <input type="checkbox" checked={config.aiProfanity || false} onChange={e => setConfig({...config, aiProfanity: e.target.checked})} className="accent-red-500 w-5 h-5"/>
-                                <span className="text-sm text-red-300 font-bold">🤬 Режим мата (Токсичность)</span>
+                                <span className="text-sm text-red-300 font-bold">🤬 Токсичность</span>
                             </label>
-                            <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-gray-900/50 border border-gray-700 hover:border-blue-500/50 transition-colors">
+                            <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-gray-900/50 border border-gray-700">
                                 <input type="checkbox" checked={config.enablePM || false} onChange={e => setConfig({...config, enablePM: e.target.checked})} className="accent-blue-500 w-5 h-5"/>
-                                <span className="text-sm text-blue-300 font-bold">📩 Отвечать в ЛС (Личка)</span>
+                                <span className="text-sm text-blue-300 font-bold">📩 Отвечать в ЛС</span>
                             </label>
                         </div>
-
-                         {config.aiProfanity && (
-                            <div className="bg-gray-900/30 p-4 rounded-xl border border-gray-700 animate-slideIn">
-                                <label className="text-xs text-gray-400 font-bold uppercase mb-2 block">Свои словечки (Бот будет использовать их)</label>
-                                <div className="flex gap-2 mb-2">
-                                    <input 
-                                        value={newProfanityWord} 
-                                        onChange={e => setNewProfanityWord(e.target.value)} 
-                                        onKeyDown={e => e.key === 'Enter' && handleAddProfanity()}
-                                        placeholder="Добавить фразу (напр. 'Йоу', 'Ну ты даешь')..." 
-                                        className="flex-1 bg-black border border-gray-600 rounded px-3 py-1.5 text-sm text-white focus:border-red-500 outline-none"
-                                    />
-                                    <button onClick={handleAddProfanity} className="bg-red-900/40 text-red-300 border border-red-500/30 px-3 rounded text-sm hover:bg-red-900/60"><Icons.Plus size={16}/></button>
-                                </div>
-                                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto custom-scrollbar p-1">
-                                    {(config.customProfanityList || []).map((word, i) => (
-                                        <span key={`${word}-${i}`} className="bg-red-900/20 text-red-200 border border-red-800 px-2 py-1 rounded text-xs flex items-center gap-2">
-                                            {word}
-                                            <button onClick={() => handleRemoveProfanity(word)} className="hover:text-white transition-all"><Icons.X size={12}/></button>
-                                        </span>
-                                    ))}
-                                    {(!config.customProfanityList || config.customProfanityList.length === 0) && <span className="text-gray-500 text-xs italic">Список пуст</span>}
-                                </div>
-                            </div>
-                        )}
 
                          <div className="flex gap-2 pt-4">
                             <button onClick={() => setShowPlayground(true)} className="flex-1 bg-gray-800 text-purple-300 border border-purple-900/30 py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-gray-700 transition-colors">
@@ -375,7 +331,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                  </div>
                  
-                 {/* Playground Modal */}
                 {showPlayground && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowPlayground(false)}>
                         <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl animate-slideIn flex flex-col h-[600px]" onClick={e => e.stopPropagation()}>
@@ -406,7 +361,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         );
     }
     
-    // ... Rest of Dashboard logic (KPICards, Charts render)
     return (
         <div className="space-y-8 relative">
             {/* KPI Cards */}
@@ -444,7 +398,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                 <div className="xl:col-span-2 bg-[#121214] p-6 rounded-2xl border border-gray-800 shadow-xl">
                     <div className="flex items-center justify-between mb-6">
                         <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                            <Icons.Calendar size={20} className="text-blue-500"/> Динамика активности
+                            <Icons.Calendar size={20} className="text-blue-500"/> Статистика (7 дней)
                         </h3>
                         <div className="flex gap-2">
                             <button onClick={onClearAiStats} className="text-xs text-gray-500 hover:text-red-400 flex items-center gap-1 transition-colors px-2 py-1 rounded hover:bg-gray-800">
@@ -454,18 +408,18 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                     <div className="h-[350px] w-full">
                         <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={getActivityData()}>
-                                <defs>
-                                    <linearGradient id="colorMsg" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3}/><stop offset="95%" stopColor="#3B82F6" stopOpacity={0}/></linearGradient>
-                                    <linearGradient id="colorAi" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#8B5CF6" stopOpacity={0.3}/><stop offset="95%" stopColor="#8B5CF6" stopOpacity={0}/></linearGradient>
-                                </defs>
-                                <XAxis dataKey="date" stroke="#4b5563" fontSize={10} tickLine={false} axisLine={false} dy={10} interval={Math.floor(getActivityData().length / 6)} />
-                                <YAxis stroke="#4b5563" fontSize={12} tickLine={false} axisLine={false} dx={-10} allowDecimals={false} />
+                            <BarChart data={getSimpleChartData()}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
-                                <Tooltip contentStyle={{backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '12px'}} />
-                                <Area type="monotone" dataKey="messages" name="Чат" stroke="#3B82F6" strokeWidth={3} fillOpacity={1} fill="url(#colorMsg)" />
-                                <Area type="monotone" dataKey="ai" name="AI" stroke="#8B5CF6" strokeWidth={3} fillOpacity={1} fill="url(#colorAi)" />
-                            </AreaChart>
+                                <XAxis dataKey="name" stroke="#6b7280" fontSize={12} tickLine={false} axisLine={false} dy={10} />
+                                <YAxis stroke="#6b7280" fontSize={12} tickLine={false} axisLine={false} dx={-10} allowDecimals={false} />
+                                <Tooltip 
+                                    contentStyle={{backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '12px'}} 
+                                    cursor={{fill: '#27272a'}}
+                                />
+                                <Legend wrapperStyle={{paddingTop: '20px'}}/>
+                                <Bar dataKey="users" name="Сообщения в группе" fill="#3B82F6" radius={[4, 4, 0, 0]} barSize={30} />
+                                <Bar dataKey="ai" name="Ответы AI" fill="#8B5CF6" radius={[4, 4, 0, 0]} barSize={30} />
+                            </BarChart>
                         </ResponsiveContainer>
                     </div>
                 </div>

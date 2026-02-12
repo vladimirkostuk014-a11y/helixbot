@@ -123,21 +123,19 @@ const apiCall = async (method, body) => {
 };
 
 // ==========================================
-// 4. SCHEDULERS (DAILY TOP & CALENDAR)
+// 4. SCHEDULERS
 // ==========================================
 setInterval(async () => {
     const now = new Date();
-    // MSK Time
     const mskTime = new Date(now.toLocaleString("en-US", {timeZone: "Europe/Moscow"}));
     const mskHours = mskTime.getHours();
     const mskMinutes = mskTime.getMinutes();
     
-    // 1. Daily Reset & Top (at 00:00 MSK)
+    // Daily Reset & Top (at 00:00 MSK)
     if (mskHours === 0 && mskMinutes === 0) {
         if (!dailyTopSent) {
             if (state.config.enableAutoTop) await sendDailyTop();
             
-            // RESET DAILY COUNTERS
             const updates = {};
             Object.keys(state.users).forEach(uid => {
                 updates[`users/${uid}/dailyMsgCount`] = 0;
@@ -150,23 +148,19 @@ setInterval(async () => {
         dailyTopSent = false;
     }
 
-    // 2. Calendar Notifications (Every minute)
+    // Calendar Notifications
     if (state.config.enableCalendarAlerts && Date.now() - lastCalendarCheck > 55000) {
         lastCalendarCheck = Date.now();
         await checkCalendarEvents(mskTime);
     }
-
 }, 30000); 
 
 const checkCalendarEvents = async (mskDate) => {
-    const todayStr = mskDate.toISOString().split('T')[0]; // YYYY-MM-DD
-    const timeStr = mskDate.toTimeString().slice(0, 5); // HH:MM
+    const todayStr = mskDate.toISOString().split('T')[0]; 
+    const timeStr = mskDate.toTimeString().slice(0, 5); 
 
     for (const event of state.calendarEvents) {
         if (event.notifyDate === todayStr && event.notifyTime === timeStr) {
-            // Check if already sent (to avoid duplicates, implement a flag in DB ideally, strictly strictly relying on time here)
-            // For robustness, we send.
-            
             const msg = `⚡️ <b>${event.title}</b>\n\n` +
                         `📅 <b>Даты:</b> ${event.startDate} — ${event.endDate}\n` +
                         `📂 <i>Категория: ${event.category}</i>\n\n` +
@@ -254,14 +248,13 @@ const getAIResponse = async (question, userName) => {
     let sysPrompt = `Role: ${personaMap[aiPersonality] || personaMap['helpful']}\nUser Name: ${userName}\nLanguage: Russian.\n`;
 
     if (aiProfanity) {
-        sysPrompt += `\nMODE: EXTREME PROFANITY (TOXIC). Use Russian swearing freely.`;
+        sysPrompt += `\nMODE: EXTREME PROFANITY (TOXIC).`;
         if (customProfanityList && customProfanityList.length > 0) {
              const randomWord = customProfanityList[Math.floor(Math.random() * customProfanityList.length)];
              sysPrompt += `\nTry to use this phrase: "${randomWord}".`;
         }
     }
 
-    // Dynamic "No Info" message based on personality
     const noInfoPhrases = {
         'helpful': "Извините, в моей базе знаний нет информации об этом.",
         'kind': "Ой, я пока этого не знаю 🥺",
@@ -314,8 +307,6 @@ const getAIResponse = async (question, userName) => {
 const ensureUserExists = async (user) => {
     if (!user || user.is_bot) return;
     const uid = String(user.id);
-    
-    // Check local state first to reduce DB reads, but update lastSeen
     const currentUser = state.users[uid];
     
     const updates = {
@@ -323,8 +314,7 @@ const ensureUserExists = async (user) => {
         name: user.first_name,
         username: user.username || '',
         lastSeen: new Date().toLocaleTimeString('ru-RU'),
-        lastActiveDate: new Date().toISOString(), // For sorting
-        // Don't overwrite role or warnings
+        lastActiveDate: new Date().toISOString(),
     };
 
     if (!currentUser) {
@@ -346,40 +336,126 @@ const ensureUserExists = async (user) => {
 const saveMessage = async (msgObj, uid, threadId) => {
     // 1. Save to User CRM History
     if (uid) {
-        const userRef = ref(db, `users/${uid}/history`);
-        const userSnap = await get(userRef);
-        let userHist = userSnap.val() || [];
-        if (!Array.isArray(userHist)) userHist = Object.values(userHist);
-        userHist.push(msgObj);
-        if (userHist.length > 50) userHist = userHist.slice(-50);
-        await set(userRef, userHist);
-        
-        // Increment unread count for user in CRM
-        if (msgObj.dir === 'in') {
-             await firebaseUpdate(ref(db, `users/${uid}`), { unreadCount: (state.users[uid]?.unreadCount || 0) + 1 });
-        }
+        const historyRef = ref(db, `users/${uid}/history`);
+        // Get current history specifically to append safely
+        try {
+            const snap = await get(historyRef);
+            let hist = snap.val() || [];
+            if (!Array.isArray(hist)) hist = Object.values(hist);
+            
+            hist.push(msgObj);
+            if (hist.length > 50) hist = hist.slice(-50);
+            
+            await set(historyRef, hist);
+            
+            if (msgObj.dir === 'in') {
+                const unreadRef = ref(db, `users/${uid}/unreadCount`);
+                const uSnap = await get(unreadRef);
+                await set(unreadRef, (uSnap.val() || 0) + 1);
+            }
+        } catch (e) { console.error("Save CRM msg error:", e); }
     }
 
     // 2. Save to Topic/LiveChat History
     if (threadId) {
         const topicRef = ref(db, `topicHistory/${threadId}`);
-        const topicSnap = await get(topicRef);
-        let topicHist = topicSnap.val() || [];
-        if (!Array.isArray(topicHist)) topicHist = Object.values(topicHist);
-        topicHist.push(msgObj);
-        if (topicHist.length > 100) topicHist = topicHist.slice(-100);
-        await set(topicRef, topicHist);
+        try {
+            const snap = await get(topicRef);
+            let hist = snap.val() || [];
+            if (!Array.isArray(hist)) hist = Object.values(hist);
+            hist.push(msgObj);
+            if (hist.length > 100) hist = hist.slice(-100);
+            await set(topicRef, hist);
 
-        if (msgObj.dir === 'in') {
-            const unreadRef = ref(db, `topicUnreads/${threadId}`);
-            const unreadSnap = await get(unreadRef);
-            await set(unreadRef, (unreadSnap.val() || 0) + 1);
-        }
+            if (msgObj.dir === 'in') {
+                const unreadRef = ref(db, `topicUnreads/${threadId}`);
+                const uSnap = await get(unreadRef);
+                await set(unreadRef, (uSnap.val() || 0) + 1);
+            }
+        } catch (e) { console.error("Save Topic msg error:", e); }
     }
 };
 
 // ==========================================
-// 7. MAIN LOGIC (PROCESS UPDATE)
+// 7. ADMIN ACTION LOGIC
+// ==========================================
+const executeAdminAction = async (action, msg, targetUser, targetName) => {
+    const chatId = msg.chat.id;
+    const targetId = targetUser.id;
+    
+    // Default values
+    let responseVars = { target_name: targetName, warns: 0 };
+    
+    try {
+        if (action === 'warn') {
+            const userRef = ref(db, `users/${targetId}`);
+            const snap = await get(userRef);
+            const userData = snap.val() || {};
+            let warns = (userData.warnings || 0) + 1;
+            
+            await firebaseUpdate(userRef, { warnings: warns });
+            responseVars.warns = warns;
+
+            if (warns >= 3) {
+                 // Auto Mute/Ban logic if needed, usually Mute
+                 await apiCall('restrictChatMember', {
+                    chat_id: chatId,
+                    user_id: targetId,
+                    permissions: JSON.stringify({ can_send_messages: false }),
+                    until_date: Math.floor(Date.now() / 1000) + 86400 
+                });
+                await firebaseUpdate(userRef, { status: 'muted' });
+            }
+        } 
+        else if (action === 'unwarn') {
+            const userRef = ref(db, `users/${targetId}`);
+            const snap = await get(userRef);
+            const userData = snap.val() || {};
+            let warns = Math.max(0, (userData.warnings || 0) - 1);
+            await firebaseUpdate(userRef, { warnings: warns });
+            responseVars.warns = warns;
+        }
+        else if (action === 'mute') {
+            await apiCall('restrictChatMember', {
+                chat_id: chatId,
+                user_id: targetId,
+                permissions: JSON.stringify({ can_send_messages: false }),
+                until_date: Math.floor(Date.now() / 1000) + 86400 
+            });
+            await firebaseUpdate(ref(db, `users/${targetId}`), { status: 'muted' });
+        }
+        else if (action === 'unmute') {
+            await apiCall('restrictChatMember', {
+                chat_id: chatId,
+                user_id: targetId,
+                permissions: JSON.stringify({ 
+                    can_send_messages: true,
+                    can_send_media_messages: true,
+                    can_send_polls: true,
+                    can_send_other_messages: true,
+                    can_add_web_page_previews: true,
+                    can_invite_users: true
+                })
+            });
+            await firebaseUpdate(ref(db, `users/${targetId}`), { status: 'active' });
+        }
+        else if (action === 'ban') {
+            await apiCall('banChatMember', { chat_id: chatId, user_id: targetId });
+            await firebaseUpdate(ref(db, `users/${targetId}`), { status: 'banned' });
+        }
+        else if (action === 'unban') {
+            await apiCall('unbanChatMember', { chat_id: chatId, user_id: targetId, only_if_banned: true });
+            await firebaseUpdate(ref(db, `users/${targetId}`), { status: 'active', warnings: 0 });
+        }
+    } catch (e) {
+        console.error("Admin Action Error:", e);
+    }
+    return responseVars;
+};
+
+
+// ==========================================
+// 8. MAIN LOGIC (PROCESS UPDATE)
 // ==========================================
 const processUpdate = async (upd) => {
     try {
@@ -391,21 +467,27 @@ const processUpdate = async (upd) => {
         const isPrivate = m.chat.type === 'private';
         const threadId = m.message_thread_id ? String(m.message_thread_id) : (isPrivate ? String(user.id) : 'general');
 
-        // 1. REGISTER GROUP
+        // 1. HANDLE LEFT MEMBERS (Delete from DB)
+        if (m.left_chat_member) {
+            const leftUid = String(m.left_chat_member.id);
+            await remove(ref(db, `users/${leftUid}`));
+            return;
+        }
+
+        // 2. REGISTER GROUP
         if (!isPrivate) {
             const correctId = String(m.chat.id);
             if (!state.groups[correctId]) {
                  await set(ref(db, `groups/${correctId}`), { id: m.chat.id, title: m.chat.title, isDisabled: false, lastActive: new Date().toLocaleDateString() });
             }
-            // Fix: Check disabled group status immediately
             if (state.groups[correctId]?.isDisabled) return;
         }
 
-        // 2. REGISTER USER & LOG MESSAGE
+        // 3. REGISTER USER & LOG MESSAGE
         if (user && !user.is_bot) {
             await ensureUserExists(user);
 
-            // Fix Welcome Logic: Handle New Members separately
+            // Welcome New Members
             if (m.new_chat_members) {
                  const welcome = state.commands.find(c => c.trigger === '_welcome_');
                  if (welcome) {
@@ -414,18 +496,17 @@ const processUpdate = async (upd) => {
                         await ensureUserExists(member);
                         let text = welcome.response.replace(/{user}/g, `<a href="tg://user?id=${member.id}">${member.first_name}</a>`).replace(/{name}/g, member.first_name);
                         const kb = welcome.buttons?.length > 0 ? { inline_keyboard: welcome.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
-                        const tid = threadId !== 'general' ? threadId : undefined;
-
+                        
                         if (welcome.mediaUrl) {
-                            await apiCall('sendPhoto', { chat_id: cid, photo: welcome.mediaUrl, caption: text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: tid });
+                            await apiCall('sendPhoto', { chat_id: cid, photo: welcome.mediaUrl, caption: text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: threadId!=='general'?threadId:undefined });
                         } else {
-                            await apiCall('sendMessage', { chat_id: cid, text: text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: tid });
+                            await apiCall('sendMessage', { chat_id: cid, text: text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: threadId!=='general'?threadId:undefined });
                         }
                     }
                  }
-                 // Continue processing for CRM logging of join events if needed, or just return
             }
 
+            // Save Message to DB
             if (m.text || m.caption || m.photo || m.video) {
                 const msgText = m.text || m.caption || (m.photo ? '[Photo]' : '[Video]');
                 const newMsg = {
@@ -435,7 +516,7 @@ const processUpdate = async (upd) => {
                     time: new Date().toLocaleTimeString('ru-RU'),
                     timestamp: Date.now(),
                     isIncoming: true,
-                    isGroup: !isPrivate, // Fixed: Correctly mark PMs as not group
+                    isGroup: !isPrivate, 
                     user: user.first_name,
                     userId: user.id,
                     msgId: m.message_id
@@ -452,12 +533,11 @@ const processUpdate = async (upd) => {
 
         if (!state.isBotActive) return;
 
-        // 3. COMMANDS & AI
+        // 4. COMMANDS & AI
         if (!m.text || user.is_bot) return;
         const txt = m.text.trim();
         const lowerTxt = txt.toLowerCase();
 
-        // Check Commands
         for (const cmd of state.commands) {
             let match = false;
             if (cmd.matchType === 'exact') match = lowerTxt === cmd.trigger.toLowerCase();
@@ -470,11 +550,9 @@ const processUpdate = async (upd) => {
                 
                 if (cmd.isSystem && dbUserRole !== 'admin') continue;
                 
-                // Permission Check (Fix 9)
                 const allowedRoles = cmd.allowedRoles || ['user', 'admin'];
                 if (!allowedRoles.includes(dbUserRole)) continue;
 
-                // Topic Check (Fix 6)
                 if (cmd.allowedTopicId) {
                     if (cmd.allowedTopicId === 'private_only' && !isPrivate) continue;
                     if (cmd.allowedTopicId !== 'private_only' && cmd.allowedTopicId !== String(threadId) && cmd.allowedTopicId !== 'general' && !isPrivate) continue;
@@ -482,7 +560,34 @@ const processUpdate = async (upd) => {
 
                 let resp = cmd.response.replace(/{user}/g, user.first_name).replace(/{name}/g, user.first_name);
                 
-                // Fix 4: Warnings Placeholder
+                // --- ADMIN LOGIC HANDLER ---
+                if (['/warn', '_warn_', '/mute', '_mute_', '/ban', '_ban_', '/unwarn', '_unwarn_', '/unmute', '_unmute_', '/unban', '_unban_'].some(t => cmd.trigger.includes(t))) {
+                    if (m.reply_to_message && m.reply_to_message.from) {
+                        const targetUser = m.reply_to_message.from;
+                        const targetName = targetUser.first_name;
+                        
+                        // Determine action based on trigger
+                        let action = '';
+                        if (cmd.trigger.includes('warn') && !cmd.trigger.includes('un')) action = 'warn';
+                        else if (cmd.trigger.includes('unwarn')) action = 'unwarn';
+                        else if (cmd.trigger.includes('mute') && !cmd.trigger.includes('un')) action = 'mute';
+                        else if (cmd.trigger.includes('unmute')) action = 'unmute';
+                        else if (cmd.trigger.includes('ban') && !cmd.trigger.includes('un')) action = 'ban';
+                        else if (cmd.trigger.includes('unban')) action = 'unban';
+
+                        if (action) {
+                            const vars = await executeAdminAction(action, m, targetUser, targetName);
+                            resp = resp.replace(/{target_name}/g, `<a href="tg://user?id=${targetUser.id}">${vars.target_name}</a>`)
+                                       .replace(/{warns}/g, vars.warns);
+                        }
+                    } else {
+                        // If no reply, ignore or send help? For now, we continue but won't execute logic.
+                        // Or better: return to prevent spam if misused
+                        if (!isPrivate) return; 
+                    }
+                }
+                
+                // Generic Warning display for self-check
                 if (resp.includes('{warns}')) {
                     const currentWarns = dbUser?.warnings || 0;
                     resp = resp.replace(/{warns}/g, currentWarns);
@@ -515,8 +620,6 @@ const processUpdate = async (upd) => {
         if (state.config.enableAI) {
             const isHelixTrigger = lowerTxt.startsWith('хеликс') || lowerTxt.startsWith('helix');
             
-            // Fix 2: Logic for PM trigger.
-            // Requirement: "Answer ONLY if word starts with Helix" (even in PM)
             if (isHelixTrigger) {
                 if (state.disabledAiTopics && state.disabledAiTopics.includes(String(threadId))) return;
 
@@ -542,7 +645,6 @@ const processUpdate = async (upd) => {
                         user: 'Helix AI'
                     }, String(user.id), threadId);
                     
-                    // Stats
                     const newStat = { query: q, response: a, time: Date.now() };
                     const statsRef = ref(db, 'aiStats');
                     const statsSnap = await get(statsRef);
