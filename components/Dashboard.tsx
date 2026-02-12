@@ -159,28 +159,27 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         const month = today.getMonth(); 
         const daysInMonth = new Date(year, month + 1, 0).getDate();
         
-        // Map keys "DD.MM" -> data
+        // Prepare Map: "DD.MM" -> Object
         const dataMap = new Map<string, { date: string, messages: number, ai: number }>();
         
-        // Initialize map with empty days
         for (let i = 1; i <= daysInMonth; i++) {
             const d = new Date(year, month, i);
-            const dateKey = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }); // "12.02"
-            dataMap.set(dateKey, { date: dateKey, messages: 0, ai: 0 });
+            const key = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+            dataMap.set(key, { date: key, messages: 0, ai: 0 });
         }
         
-        // Process User Messages
+        // Iterate Users History
         if (users) {
             Object.values(users).forEach(user => {
                 if (user && user.history) {
                     user.history.forEach(msg => {
                         if (!msg.timestamp) return;
-                        const msgDate = new Date(msg.timestamp);
-                        // Filter for current month/year only
-                        if (msgDate.getFullYear() === year && msgDate.getMonth() === month && msg.isGroup) {
-                            const dateKey = msgDate.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-                            if (dataMap.has(dateKey)) {
-                                dataMap.get(dateKey)!.messages += 1;
+                        const d = new Date(msg.timestamp);
+                        if (d.getFullYear() === year && d.getMonth() === month && msg.isGroup) {
+                            const key = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+                            const entry = dataMap.get(key);
+                            if (entry) {
+                                entry.messages++;
                             }
                         }
                     });
@@ -188,14 +187,15 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
             });
         }
         
-        // Process AI Stats
+        // Iterate AI Stats
         if (aiStats && aiStats.history) {
             aiStats.history.forEach(stat => {
-                 const statDate = new Date(stat.time);
-                 if (statDate.getFullYear() === year && statDate.getMonth() === month) {
-                    const dateKey = statDate.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-                    if (dataMap.has(dateKey)) {
-                        dataMap.get(dateKey)!.ai += 1;
+                 const d = new Date(stat.time);
+                 if (d.getFullYear() === year && d.getMonth() === month) {
+                    const key = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+                    const entry = dataMap.get(key);
+                    if (entry) {
+                        entry.ai++;
                     }
                  }
             });
@@ -405,7 +405,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         );
     }
     
-    // ... Rest of Dashboard logic (KPICards, Charts render)
+    // ... Rest of Dashboard logic
     return (
         <div className="space-y-8 relative">
             {/* KPI Cards */}
@@ -498,7 +498,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                 </div>
             </div>
 
-            {/* Existing Modals code... (Active, Groups, AI Stats) same as before */}
+            {/* Existing Modals code... (Active, Groups, AI Stats) */}
             {showActiveModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowActiveModal(false)}>
                     <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl p-6 animate-slideIn" onClick={e => e.stopPropagation()}>

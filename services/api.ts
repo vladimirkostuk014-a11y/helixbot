@@ -43,7 +43,7 @@ const performAiRequest = async (apiKey: string, config: BotConfig, messages: any
         body: JSON.stringify({
             model: config.aiModel || "llama-3.3-70b-versatile",
             messages: messages,
-            temperature: config.aiProfanity ? 0.7 : 0.1, // Higher temp for profanity/creativity
+            temperature: config.aiProfanity ? 0.8 : 0.1, // Higher temp for profanity/creativity
             max_tokens: 800,
         })
     });
@@ -60,48 +60,50 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
 
     // PERSONALITY MAP
     const personaMap: Record<string, string> = {
-        'helpful': 'Ты полезный помощник Хеликс. Ты вежлив и краток.',
-        'kind': 'Ты очень добрый и милый помощник. Используй уменьшительно-ласкательные слова.',
-        'official': 'Ты строгий официальный бот. Отвечай сухо, по делу, канцеляритом.',
-        'joker': 'Ты стендап-комик. Постоянно шути, даже если это неуместно.',
-        'angry': 'Ты злой бот. Ты ненавидишь отвечать на вопросы, но отвечаешь.',
-        'gopnik': 'Ты гопник с района. Общайся на ты, используй сленг (чё, каво, э слыш).'
+        'helpful': 'Ты полезный помощник Хеликс.',
+        'kind': 'Ты очень добрый и милый помощник. Используй уменьшительно-ласкательные слова. Обнимай словами.',
+        'official': 'Ты строгий официальный бот-администратор. Отвечай сухо, по делу, используй канцелярит. Никаких эмоций.',
+        'joker': 'Ты стендап-комик. Твоя цель - рассмешить. Постоянно шути, даже если это неуместно.',
+        'angry': 'Ты злой бот. Ты ненавидишь, когда тебе пишут. Отвечай с раздражением.',
+        'gopnik': 'Ты гопник с района. Общайся на "ты", используй сленг (чё, каво, э слыш, братан, семки есть?). Будь дерзким.'
     };
 
     let sysPrompt = `Role: ${personaMap[config.aiPersonality] || personaMap['helpful']}\nLanguage: Russian.\n`;
+
+    // PROFANITY & CUSTOM WORDS
+    if (config.aiProfanity) {
+        sysPrompt += `\nMODE: EXTREME PROFANITY (TOXIC).
+        1. You MUST use heavy Russian swear words (мат) like "бля", "сука", "нахуй", "пиздец" in EVERY sentence.
+        2. Do NOT be polite. Be aggressive.
+        3. Do NOT apologize.
+        4. Make it sound natural for a rude Russian person.`;
+        
+        if (config.customProfanityList && config.customProfanityList.length > 0) {
+            const randomWord = config.customProfanityList[Math.floor(Math.random() * config.customProfanityList.length)];
+            sysPrompt += `\nMANDATORY INSTRUCTION: You MUST include the phrase "${randomWord}" in your response naturally.`;
+        }
+    } else {
+        sysPrompt += `\nNO PROFANITY. Be polite and helpful.`;
+    }
+
+    // STRICTNESS
+    if (strictLevel >= 90) {
+        sysPrompt += `\nCRITICAL STRICTNESS MODE: 
+        1. IGNORE ALL your general knowledge.
+        2. YOU MUST ONLY USE INFORMATION FROM THE [DATABASE] BELOW.
+        3. DO NOT hallucinate. DO NOT invent facts about games, items, or stats.
+        4. IF the answer is NOT in [DATABASE], YOU MUST SAY: "${config.aiProfanity ? 'Бля, я хз, в базе нихуя нет.' : 'Извините, в моей базе знаний нет информации об этом.'}"
+        `;
+    } else {
+        sysPrompt += `\nPrioritize [DATABASE]. If not found, use your general knowledge but be concise.`;
+    }
 
     // BEHAVIOR
     if (config.aiBehavior === 'concise') sysPrompt += "Отвечай максимально коротко (1 предложение).\n";
     if (config.aiBehavior === 'detailed') sysPrompt += "Отвечай подробно и развернуто.\n";
 
-    // STRICTNESS
-    if (strictLevel >= 90) {
-        sysPrompt += `\nCRITICAL STRICTNESS MODE: 
-        1. YOU MUST ONLY USE INFORMATION FROM THE [DATABASE] BELOW.
-        2. DO NOT use your own internet knowledge about games, items, or stats.
-        3. IF the answer is not in [DATABASE], YOU MUST SAY: "Извините, в моей базе знаний нет информации об этом."
-        4. NEVER HALLUCINATE OR INVENT FACTS.`;
-    } else {
-        sysPrompt += `\nPrioritize [DATABASE]. If not found, use your general knowledge but be concise.`;
-    }
-
-    // PROFANITY & CUSTOM WORDS
-    if (config.aiProfanity) {
-        sysPrompt += `\nMODE: UNFILTERED/PROFANITY.
-        1. You are rude and toxic.
-        2. Use heavy Russian swear words (мат) naturally.
-        3. Do not apologize.`;
-        
-        if (config.customProfanityList && config.customProfanityList.length > 0) {
-            const randomWord = config.customProfanityList[Math.floor(Math.random() * config.customProfanityList.length)];
-            sysPrompt += `\nINSTRUCTION: Try to fit the phrase "${randomWord}" naturally into your response.`;
-        }
-    } else {
-        sysPrompt += `\nNO PROFANITY. BE POLITE.`;
-    }
-
     // EMOJI RULE
-    sysPrompt += `\nEMOJI RULES: Do not add your own emojis. Only copy emojis if they are in the [DATABASE].`;
+    sysPrompt += `\nEMOJI RULES: Do not add your own emojis unless they are in the [DATABASE]. Copy emojis from [DATABASE] exactly.`;
     
     const messages = [
         { role: "system", content: sysPrompt + "\n\n[DATABASE]:\n" + knowledgeBaseContext },
