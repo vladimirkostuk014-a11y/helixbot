@@ -24,7 +24,6 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
     const [currentCmd, setCurrentCmd] = useState<Partial<Command>>({});
     const [buttonDraft, setButtonDraft] = useState<InlineButton>({ text: '', url: '' });
     const [collapsed, setCollapsed] = useState({ system: true, custom: true });
-    
     const [previewMedia, setPreviewMedia] = useState<string | null>(null);
 
     const handleSave = () => {
@@ -52,7 +51,7 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
             newCommands = [...commands, newCmd];
         }
         setCommands(newCommands);
-        saveData('commands', newCommands); // Explicit Save
+        saveData('commands', newCommands);
         setIsEditing(false);
         setPreviewMedia(null);
     };
@@ -60,14 +59,10 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
     const handleDelete = (id: string | number) => {
         const newCommands = commands.filter(c => c.id !== id);
         setCommands(newCommands);
-        saveData('commands', newCommands); // Explicit Save
+        saveData('commands', newCommands);
         setIsEditing(false);
     };
     
-    // ... rest of the file logic (UI for editing) remains same, just ensure handleSave calls saveData
-    // Shortened for brevity, full render logic is preserved
-    
-    // File Upload Handler
     const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
@@ -100,7 +95,6 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
     const systemCmds = commands.filter(c => c.isSystem).sort((a, b) => (a.color || 'Default').localeCompare(b.color || 'Default'));
     const customCmds = commands.filter(c => !c.isSystem);
     const getCmdStyle = (colorName?: string) => { const theme = COLORS.find(c => c.name === colorName) || COLORS[0]; return `${theme.bg} ${theme.border}`; };
-    const isWelcomeOrTop = currentCmd.trigger === '_welcome_' || currentCmd.trigger === '_daily_top_';
 
     return (
         <div className="flex flex-col lg:flex-row gap-6 h-full">
@@ -110,7 +104,6 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
                     <button onClick={() => { setIsEditing(true); setCurrentCmd({ trigger: '/', matchType: 'exact', buttons: [], allowedRoles: ['user', 'admin'] }); setPreviewMedia(null); }} className="p-1.5 text-gray-400 hover:text-white bg-gray-800 rounded-md"><Icons.Plus size={18}/></button>
                 </div>
                 <div className="overflow-y-auto p-2 custom-scrollbar space-y-2">
-                    {/* Groups */}
                     {[{ title: 'Системные', list: systemCmds, open: collapsed.system, toggle: () => setCollapsed(p => ({...p, system: !p.system})) }, 
                       { title: 'Пользовательские', list: customCmds, open: collapsed.custom, toggle: () => setCollapsed(p => ({...p, custom: !p.custom})) }]
                     .map((grp, i) => (
@@ -178,8 +171,28 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
                                 </select>
                             </div>
                         </div>
+
+                        {/* FIX 9: Permission Selector */}
+                        {!currentCmd.isSystem && (
+                            <div>
+                                <label className="text-xs text-gray-500 uppercase font-bold block mb-2">Кто может использовать?</label>
+                                <div className="flex gap-4">
+                                    <button 
+                                        onClick={() => toggleRole('user')}
+                                        className={`px-3 py-1.5 rounded-lg border text-sm font-bold flex items-center gap-2 ${currentCmd.allowedRoles?.includes('user') ? 'bg-blue-600 border-blue-500 text-white' : 'bg-transparent border-gray-700 text-gray-500'}`}
+                                    >
+                                        <Icons.Users size={14}/> Обычные пользователи
+                                    </button>
+                                    <button 
+                                        onClick={() => toggleRole('admin')}
+                                        className={`px-3 py-1.5 rounded-lg border text-sm font-bold flex items-center gap-2 ${currentCmd.allowedRoles?.includes('admin') ? 'bg-yellow-600 border-yellow-500 text-black' : 'bg-transparent border-gray-700 text-gray-500'}`}
+                                    >
+                                        <Icons.Shield size={14}/> Админы
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                         
-                        {/* Media and Buttons UI same as before */}
                         <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
                              <label className="text-xs text-gray-500 uppercase font-bold block mb-2">Медиа (Фото/Видео)</label>
                              <div className="flex gap-4 items-center">

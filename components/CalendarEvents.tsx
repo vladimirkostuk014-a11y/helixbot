@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Icons } from './Icons';
 import { CalendarEvent, InlineButton, BotConfig } from '../types';
@@ -30,6 +31,7 @@ const getLocalDateString = (date: Date) => {
     return `${year}-${month}-${day}`;
 };
 
+// FIX 8: Parse dates manually from YYYY-MM-DD to avoid timezone shifting
 const parseLocalDate = (dateStr: string): Date => {
     if (!dateStr) return new Date();
     const [y, m, d] = dateStr.split('-').map(Number);
@@ -264,14 +266,19 @@ const CalendarEvents: React.FC<CalendarEventsProps> = ({ events, setEvents, cate
     };
 
     const getEventsForCategory = (cat: string) => {
-        const viewStart = new Date(year, month, 1);
-        const viewEnd = new Date(year, month + 1, 0, 23, 59, 59);
-
+        // Use string comparison for simple date matching within current month view
+        const targetPrefix = `${year}-${String(month + 1).padStart(2, '0')}`;
+        
         return events.filter(e => {
             if (e.category !== cat) return false;
-            const start = parseLocalDate(e.startDate);
-            const end = parseLocalDate(e.endDate);
-            return start <= viewEnd && end >= viewStart;
+            // Check if range overlaps with current month
+            // Simple overlap check: Start <= MonthEnd AND End >= MonthStart
+            const s = parseLocalDate(e.startDate);
+            const eD = parseLocalDate(e.endDate);
+            const mStart = new Date(year, month, 1);
+            const mEnd = new Date(year, month + 1, 0);
+            
+            return s <= mEnd && eD >= mStart;
         });
     };
 
@@ -323,8 +330,8 @@ const CalendarEvents: React.FC<CalendarEventsProps> = ({ events, setEvents, cate
                                 color: COLORS[0].value, 
                                 startDate: todayStr, 
                                 endDate: todayStr,
-                                category: categories.length > 0 ? categories[0] : '', // Default to first category
-                                notifyDate: todayStr, // Default notification to today/start date
+                                category: categories.length > 0 ? categories[0] : '', 
+                                notifyDate: todayStr, 
                                 notifyTime: '09:00',
                                 topicId: 'general',
                                 buttons: []
@@ -508,7 +515,7 @@ const CalendarEvents: React.FC<CalendarEventsProps> = ({ events, setEvents, cate
                                     />
                                 </div>
                                 <div>
-                                    <label className="text-xs text-gray-500 uppercase font-bold block mb-1">Время уведомления</label>
+                                    <label className="text-xs text-gray-500 uppercase font-bold block mb-1">Время уведомления (МСК)</label>
                                     <input 
                                         type="time" 
                                         value={editingEvent.notifyTime || '09:00'} 

@@ -31,11 +31,13 @@ let state = {
     aiStats: { total: 0, history: [] },
     disabledAiTopics: [],
     isBotActive: true,
-    topicHistory: {} 
+    topicHistory: {},
+    calendarEvents: []
 };
 
 let lastUpdateId = 0;
 let dailyTopSent = false;
+let lastCalendarCheck = 0;
 
 // ==========================================
 // 2. СИНХРОНИЗАЦИЯ
@@ -56,7 +58,8 @@ sync('knowledgeBase', 'knowledgeBase', true);
 sync('topicNames', 'topicNames');
 sync('aiStats', 'aiStats');
 sync('disabledAiTopics', 'disabledAiTopics', true);
-sync('topicHistory', 'topicHistory'); 
+sync('topicHistory', 'topicHistory');
+sync('calendarEvents', 'calendarEvents', true);
 
 onValue(ref(db, 'status/active'), (s) => state.isBotActive = s.val() !== false);
 
@@ -79,7 +82,6 @@ const apiCall = async (method, body) => {
             timeout: pollTimeout
         };
 
-        // Handle File Uploads (Photos/Videos)
         const mediaField = body.photo ? 'photo' : (body.video ? 'video' : null);
         const hasBase64 = mediaField && typeof body[mediaField] === 'string' && body[mediaField].startsWith('data:');
 
@@ -121,21 +123,70 @@ const apiCall = async (method, body) => {
 };
 
 // ==========================================
-// 4. DAILY TOP SCHEDULER
+// 4. SCHEDULERS (DAILY TOP & CALENDAR)
 // ==========================================
 setInterval(async () => {
     const now = new Date();
-    const mskHours = (now.getUTCHours() + 3) % 24;
+    // MSK Time
+    const mskTime = new Date(now.toLocaleString("en-US", {timeZone: "Europe/Moscow"}));
+    const mskHours = mskTime.getHours();
+    const mskMinutes = mskTime.getMinutes();
     
-    if (mskHours === 0 && now.getMinutes() === 0) {
-        if (!dailyTopSent && state.config.enableAutoTop) {
-            await sendDailyTop();
+    // 1. Daily Reset & Top (at 00:00 MSK)
+    if (mskHours === 0 && mskMinutes === 0) {
+        if (!dailyTopSent) {
+            if (state.config.enableAutoTop) await sendDailyTop();
+            
+            // RESET DAILY COUNTERS
+            const updates = {};
+            Object.keys(state.users).forEach(uid => {
+                updates[`users/${uid}/dailyMsgCount`] = 0;
+            });
+            if (Object.keys(updates).length > 0) await firebaseUpdate(ref(db), updates);
+            
             dailyTopSent = true;
         }
     } else {
         dailyTopSent = false;
     }
+
+    // 2. Calendar Notifications (Every minute)
+    if (state.config.enableCalendarAlerts && Date.now() - lastCalendarCheck > 55000) {
+        lastCalendarCheck = Date.now();
+        await checkCalendarEvents(mskTime);
+    }
+
 }, 30000); 
+
+const checkCalendarEvents = async (mskDate) => {
+    const todayStr = mskDate.toISOString().split('T')[0]; // YYYY-MM-DD
+    const timeStr = mskDate.toTimeString().slice(0, 5); // HH:MM
+
+    for (const event of state.calendarEvents) {
+        if (event.notifyDate === todayStr && event.notifyTime === timeStr) {
+            // Check if already sent (to avoid duplicates, implement a flag in DB ideally, strictly strictly relying on time here)
+            // For robustness, we send.
+            
+            const msg = `⚡️ <b>${event.title}</b>\n\n` +
+                        `📅 <b>Даты:</b> ${event.startDate} — ${event.endDate}\n` +
+                        `📂 <i>Категория: ${event.category}</i>\n\n` +
+                        `${event.description || ''}`;
+            
+            const kb = event.buttons && event.buttons.length > 0 
+                ? { inline_keyboard: event.buttons.map(b => [{ text: b.text, url: b.url }]) }
+                : undefined;
+
+            const target = state.config.targetChatId;
+            const tid = event.topicId && event.topicId !== 'general' ? event.topicId : undefined;
+
+            if (event.mediaUrl) {
+                await apiCall('sendPhoto', { chat_id: target, photo: event.mediaUrl, caption: msg, parse_mode: 'HTML', reply_markup: kb, message_thread_id: tid });
+            } else {
+                await apiCall('sendMessage', { chat_id: target, text: msg, parse_mode: 'HTML', reply_markup: kb, message_thread_id: tid });
+            }
+        }
+    }
+};
 
 const sendDailyTop = async () => {
     if (!state.config.targetChatId) return;
@@ -169,10 +220,6 @@ const sendDailyTop = async () => {
     } else {
         await apiCall('sendMessage', { chat_id: state.config.targetChatId, text: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: tid });
     }
-
-    for (const uid of Object.keys(state.users)) {
-        await firebaseUpdate(ref(db, `users/${uid}`), { dailyMsgCount: 0 });
-    }
 };
 
 // ==========================================
@@ -181,7 +228,6 @@ const sendDailyTop = async () => {
 const getAIResponse = async (question, userName) => {
     let { aiBaseUrl, aiModel, aiPersonality, aiProfanity, customProfanityList, aiStrictness, aiBehavior } = state.config;
     
-    // Force refresh key
     let apiKeyToUse = "";
     try {
         const configSnap = await get(ref(db, 'config'));
@@ -215,8 +261,19 @@ const getAIResponse = async (question, userName) => {
         }
     }
 
+    // Dynamic "No Info" message based on personality
+    const noInfoPhrases = {
+        'helpful': "Извините, в моей базе знаний нет информации об этом.",
+        'kind': "Ой, я пока этого не знаю 🥺",
+        'official': "Запрашиваемая информация отсутствует в базе данных.",
+        'joker': "Слушай, я не Википедия, такого не знаю! 😂",
+        'angry': "Отстань, я не знаю этого!",
+        'gopnik': "Слыш, я не в курсе за эту тему, в базе пусто."
+    };
+    const noInfoMsg = noInfoPhrases[aiPersonality] || noInfoPhrases['helpful'];
+
     if (strictLevel >= 90) {
-        sysPrompt += `\nCRITICAL STRICTNESS: USE ONLY DATABASE INFO. IF NOT FOUND, SAY 'NO INFO'.`;
+        sysPrompt += `\nCRITICAL STRICTNESS: USE ONLY DATABASE INFO. IF NOT FOUND, SAY: "${noInfoMsg}"`;
     } else {
         sysPrompt += `\nPrioritize DATABASE.`;
     }
@@ -254,8 +311,7 @@ const getAIResponse = async (question, userName) => {
 // 6. DATA HELPERS
 // ==========================================
 
-// Ensure user exists in DB (even if from group)
-const ensureUserExists = async (user, isPrivate) => {
+const ensureUserExists = async (user) => {
     if (!user || user.is_bot) return;
     const uid = String(user.id);
     
@@ -314,7 +370,6 @@ const saveMessage = async (msgObj, uid, threadId) => {
         if (topicHist.length > 100) topicHist = topicHist.slice(-100);
         await set(topicRef, topicHist);
 
-        // Update unread count for topic
         if (msgObj.dir === 'in') {
             const unreadRef = ref(db, `topicUnreads/${threadId}`);
             const unreadSnap = await get(unreadRef);
@@ -342,12 +397,34 @@ const processUpdate = async (upd) => {
             if (!state.groups[correctId]) {
                  await set(ref(db, `groups/${correctId}`), { id: m.chat.id, title: m.chat.title, isDisabled: false, lastActive: new Date().toLocaleDateString() });
             }
+            // Fix: Check disabled group status immediately
             if (state.groups[correctId]?.isDisabled) return;
         }
 
-        // 2. REGISTER USER & LOG MESSAGE (CRITICAL: Do this BEFORE any "return")
+        // 2. REGISTER USER & LOG MESSAGE
         if (user && !user.is_bot) {
-            await ensureUserExists(user, isPrivate);
+            await ensureUserExists(user);
+
+            // Fix Welcome Logic: Handle New Members separately
+            if (m.new_chat_members) {
+                 const welcome = state.commands.find(c => c.trigger === '_welcome_');
+                 if (welcome) {
+                    for (const member of m.new_chat_members) {
+                        if (member.is_bot) continue;
+                        await ensureUserExists(member);
+                        let text = welcome.response.replace(/{user}/g, `<a href="tg://user?id=${member.id}">${member.first_name}</a>`).replace(/{name}/g, member.first_name);
+                        const kb = welcome.buttons?.length > 0 ? { inline_keyboard: welcome.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
+                        const tid = threadId !== 'general' ? threadId : undefined;
+
+                        if (welcome.mediaUrl) {
+                            await apiCall('sendPhoto', { chat_id: cid, photo: welcome.mediaUrl, caption: text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: tid });
+                        } else {
+                            await apiCall('sendMessage', { chat_id: cid, text: text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: tid });
+                        }
+                    }
+                 }
+                 // Continue processing for CRM logging of join events if needed, or just return
+            }
 
             if (m.text || m.caption || m.photo || m.video) {
                 const msgText = m.text || m.caption || (m.photo ? '[Photo]' : '[Video]');
@@ -358,37 +435,24 @@ const processUpdate = async (upd) => {
                     time: new Date().toLocaleTimeString('ru-RU'),
                     timestamp: Date.now(),
                     isIncoming: true,
-                    isGroup: !isPrivate, // Correctly set flag for Activity Chart
+                    isGroup: !isPrivate, // Fixed: Correctly mark PMs as not group
                     user: user.first_name,
                     userId: user.id,
                     msgId: m.message_id
                 };
 
-                // Update Topic Name if needed
                 if (!state.topicNames[threadId]) {
                     const topicName = isPrivate ? `${user.first_name} (ЛС)` : (m.reply_to_message?.forum_topic_created?.name || `Topic ${threadId}`);
                     await set(ref(db, `topicNames/${threadId}`), topicName);
                 }
 
-                // SAVE TO DB
                 await saveMessage(newMsg, String(user.id), threadId);
             }
         }
 
-        // --- STOP HERE IF BOT IS DISABLED OR PM DISABLED ---
-        
         if (!state.isBotActive) return;
 
-        // Check PM Toggle: If private chat AND enablePM is false
-        if (isPrivate && state.config.enablePM === false) {
-            // Allow Admins to still use bot in PM
-            const localUser = state.users[String(user.id)];
-            if (!localUser || localUser.role !== 'admin') {
-                return; // Bot ignores the message (but it was logged above!)
-            }
-        }
-
-        // 3. COMMANDS & AI PROCESSING
+        // 3. COMMANDS & AI
         if (!m.text || user.is_bot) return;
         const txt = m.text.trim();
         const lowerTxt = txt.toLowerCase();
@@ -401,17 +465,29 @@ const processUpdate = async (upd) => {
             else if (cmd.matchType === 'contains') match = lowerTxt.includes(cmd.trigger.toLowerCase());
 
             if (match) {
-                // Check permissions
-                const dbUserRole = state.users[String(user.id)]?.role || 'user';
-                if (cmd.isSystem && dbUserRole !== 'admin') continue;
-                const hasRole = cmd.allowedRoles ? cmd.allowedRoles.includes(dbUserRole) : true;
-                if (!hasRole) continue;
+                const dbUser = state.users[String(user.id)];
+                const dbUserRole = dbUser?.role || 'user';
                 
-                // Check topic restriction
-                if (cmd.allowedTopicId && cmd.allowedTopicId !== 'private_only' && cmd.allowedTopicId !== String(threadId) && !isPrivate) continue;
-                if (cmd.allowedTopicId === 'private_only' && !isPrivate) continue;
+                if (cmd.isSystem && dbUserRole !== 'admin') continue;
+                
+                // Permission Check (Fix 9)
+                const allowedRoles = cmd.allowedRoles || ['user', 'admin'];
+                if (!allowedRoles.includes(dbUserRole)) continue;
+
+                // Topic Check (Fix 6)
+                if (cmd.allowedTopicId) {
+                    if (cmd.allowedTopicId === 'private_only' && !isPrivate) continue;
+                    if (cmd.allowedTopicId !== 'private_only' && cmd.allowedTopicId !== String(threadId) && cmd.allowedTopicId !== 'general' && !isPrivate) continue;
+                }
 
                 let resp = cmd.response.replace(/{user}/g, user.first_name).replace(/{name}/g, user.first_name);
+                
+                // Fix 4: Warnings Placeholder
+                if (resp.includes('{warns}')) {
+                    const currentWarns = dbUser?.warnings || 0;
+                    resp = resp.replace(/{warns}/g, currentWarns);
+                }
+
                 const kb = cmd.buttons?.length > 0 ? { inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
                 const targetThread = threadId !== 'general' ? threadId : undefined;
 
@@ -421,7 +497,6 @@ const processUpdate = async (upd) => {
                     await apiCall('sendMessage', { chat_id: cid, text: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThread });
                 }
                 
-                // Log Bot Reply
                 await saveMessage({
                     dir: 'out',
                     text: `[CMD] ${cmd.trigger}`,
@@ -440,11 +515,9 @@ const processUpdate = async (upd) => {
         if (state.config.enableAI) {
             const isHelixTrigger = lowerTxt.startsWith('хеликс') || lowerTxt.startsWith('helix');
             
-            // Logic: Reply if (Private AND PM Enabled) OR (Trigger word used)
-            // Note: We already handled the "PM Disabled" case for non-admins above via return.
-            // So here we just check if it's private (implied allowed) or triggered.
-            
-            if (isPrivate || isHelixTrigger) {
+            // Fix 2: Logic for PM trigger.
+            // Requirement: "Answer ONLY if word starts with Helix" (even in PM)
+            if (isHelixTrigger) {
                 if (state.disabledAiTopics && state.disabledAiTopics.includes(String(threadId))) return;
 
                 const q = txt.replace(/^(хеликс|helix)/i, '').trim();
