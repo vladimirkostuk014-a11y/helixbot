@@ -31,11 +31,30 @@ export const apiCall = async (method: string, body: any = {}, config: BotConfig,
     }
 };
 
-export const getAIResponse = async (question: string, config: BotConfig, knowledgeBaseContext: string) => {
-    const baseUrl = config.aiBaseUrl || 'https://api.groq.com/openai/v1';
-    const apiKey = config.openaiApiKey; 
+const DEFAULT_AI_KEY = "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";
 
-    if (!apiKey) return "⚠️ Ключ AI не найден.";
+const performAiRequest = async (apiKey: string, config: BotConfig, messages: any[]) => {
+    const baseUrl = config.aiBaseUrl || 'https://api.groq.com/openai/v1';
+    
+    return await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+            model: config.aiModel || "llama-3.3-70b-versatile",
+            messages: messages,
+            temperature: 0.1, // Ultra low to prevent emoji hallucination
+            max_tokens: 800,
+        })
+    });
+};
+
+export const getAIResponse = async (question: string, config: BotConfig, knowledgeBaseContext: string) => {
+    let activeKey = config.openaiApiKey || DEFAULT_AI_KEY;
+
+    if (!activeKey) return "⚠️ Ключ AI не найден.";
 
     const strictness = config.aiStrictness || 80;
 
@@ -75,30 +94,32 @@ ${profanityRule}
 [KNOWLEDGE BASE]:
 ${knowledgeBaseContext}
 `;
+    
+    const messages = [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: question }
+    ];
 
     try {
-        const response = await fetch(`${baseUrl}/chat/completions`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-                model: config.aiModel || "llama-3.3-70b-versatile",
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: question }
-                ],
-                temperature: 0.1, // Ultra low to prevent emoji hallucination
-                max_tokens: 800,
-            })
-        });
+        let response = await performAiRequest(activeKey, config, messages);
+
+        // Retry logic for frontend as well
+        if (response.status === 401 && activeKey !== DEFAULT_AI_KEY) {
+            console.log("⚠️ Frontend AI Auth Failed (401). Retrying with Fallback Key...");
+            activeKey = DEFAULT_AI_KEY;
+            response = await performAiRequest(activeKey, config, messages);
+        }
 
         if (response.status === 429) {
             return "Слишком много запросов. Дайте мне передохнуть минуту.";
         }
 
         const data = await response.json();
+        
+        if (!response.ok) {
+            return `AI Error (${response.status}): ${data.error?.message || 'Unknown'}`;
+        }
+
         return data.choices?.[0]?.message?.content || "Пустой ответ.";
 
     } catch (e: any) {

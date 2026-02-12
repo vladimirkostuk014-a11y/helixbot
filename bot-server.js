@@ -20,6 +20,9 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
+// HARDCODED FALLBACK KEY (PROVIDED BY USER)
+const DEFAULT_AI_KEY = "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";
+
 let state = {
     config: {},
     users: {},
@@ -172,11 +175,27 @@ const sendDailyTop = async () => {
 };
 
 // ==========================================
-// 5. AI LOGIC
+// 5. AI LOGIC (WITH RETRY)
 // ==========================================
+const performAiRequest = async (apiKey, model, messages, temperature) => {
+    const { aiBaseUrl } = state.config;
+    return await fetch(`${aiBaseUrl || 'https://api.groq.com/openai/v1'}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+        body: JSON.stringify({
+            model: model || "llama-3.3-70b-versatile",
+            messages: messages,
+            temperature: temperature,
+            max_tokens: 800
+        })
+    });
+};
+
 const getAIResponse = async (question, userName) => {
-    const { openaiApiKey, aiBaseUrl, aiModel, aiPersonality, aiProfanity, customProfanityList } = state.config;
-    if (!openaiApiKey) return "⚠️ Ключ AI не найден.";
+    let { openaiApiKey, aiModel, aiPersonality, aiProfanity, customProfanityList } = state.config;
+    
+    // Default to provided key if config is missing
+    let activeKey = openaiApiKey || DEFAULT_AI_KEY;
 
     const kbContent = state.knowledgeBase.length > 0 
         ? state.knowledgeBase.map(k => `[TITLE: ${k.title}]\n${k.response}`).join('\n\n')
@@ -199,17 +218,19 @@ const getAIResponse = async (question, userName) => {
         - Не извиняйся.`;
     }
 
+    const messages = [{ role: "system", content: instructions + "\n\nDATABASE:\n" + kbContent }, { role: "user", content: question }];
+    const temperature = 0.1;
+
     try {
-        const res = await fetch(`${aiBaseUrl || 'https://api.groq.com/openai/v1'}/chat/completions`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${openaiApiKey}` },
-            body: JSON.stringify({
-                model: aiModel || "llama-3.3-70b-versatile",
-                messages: [{ role: "system", content: instructions + "\n\nDATABASE:\n" + kbContent }, { role: "user", content: question }],
-                temperature: 0.1, // Ultra low temperature to prevent emoji hallucinations
-                max_tokens: 800
-            })
-        });
+        // Attempt 1: Try with active key
+        let res = await performAiRequest(activeKey, aiModel, messages, temperature);
+        
+        // RETRY LOGIC: If 401 (Auth Error) and we haven't tried fallback yet
+        if (res.status === 401 && activeKey !== DEFAULT_AI_KEY) {
+            console.log("⚠️ AI Auth Failed (401). Retrying with Fallback Key...");
+            activeKey = DEFAULT_AI_KEY;
+            res = await performAiRequest(activeKey, aiModel, messages, temperature);
+        }
 
         const data = await res.json();
         
