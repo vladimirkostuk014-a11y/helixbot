@@ -221,10 +221,10 @@ const sendDailyTop = async () => {
 };
 
 // ==========================================
-// 5. AI LOGIC (IMPROVED PROFANITY)
+// 5. AI LOGIC (IMPROVED PROFANITY & STRICTNESS)
 // ==========================================
 const getAIResponse = async (question, userName) => {
-    let { aiBaseUrl, aiModel, aiPersonality, aiProfanity, customProfanityList, aiStrictness, aiBehavior } = state.config;
+    let { aiBaseUrl, aiModel, aiPersonality, aiProfanity, customProfanityList, aiStrictness, aiBehavior, systemPromptOverride } = state.config;
     
     let apiKeyToUse = "";
     try {
@@ -238,33 +238,53 @@ const getAIResponse = async (question, userName) => {
         ? state.knowledgeBase.map(k => `Q: ${k.triggers}\nA: ${k.response}`).join('\n\n')
         : "База знаний пуста.";
 
-    const personaMap = {
-        'helpful': 'Ты полезный помощник Хеликс.',
-        'kind': 'Ты добрый и милый помощник.',
-        'official': 'Ты строгий официальный бот.',
-        'joker': 'Ты стендап-комик. Постоянно шути.',
-        'angry': 'Ты злой бот. Ты ненавидишь людей.',
-        'gopnik': 'Ты гопник. Общайся на "ты", используй сленг.'
-    };
+    // --- PROMPT GENERATION ---
+    let sysPrompt = "";
 
-    let sysPrompt = `Role: ${personaMap[aiPersonality] || personaMap['helpful']}\nUser: ${userName}\nLanguage: Russian.\n`;
+    if (systemPromptOverride && systemPromptOverride.trim().length > 0) {
+        // 1. Manual Override Active
+        sysPrompt = systemPromptOverride;
+    } else {
+        // 2. Auto Generation
+        const personaMap = {
+            'helpful': 'Ты полезный помощник Хеликс.',
+            'kind': 'Ты добрый и милый помощник.',
+            'official': 'Ты строгий официальный бот.',
+            'joker': 'Ты стендап-комик. Постоянно шути.',
+            'angry': 'Ты злой бот. Ты ненавидишь людей.',
+            'gopnik': 'Ты гопник. Общайся на "ты", используй сленг.'
+        };
 
-    if (aiProfanity) {
-        sysPrompt += `\nMODE: EXTREME RUSSIAN PROFANITY & TOXICITY (МАТ).
-        1. Ты ОБЯЗАН использовать жесткий русский мат в каждом предложении (бля, нахуй, сука, пиздец, ебать и т.д.).
-        2. Ты должен жестко стебать пользователя, высмеивать его вопросы и тупость.
-        3. Будь максимально агрессивным и неучтивым. Никаких извинений.
-        4. Если чего-то не знаешь, посылай нахуй или говори, что тебе западло отвечать на такую хуйню.`;
-        
-        if (customProfanityList && customProfanityList.length > 0) {
-             const randomWord = customProfanityList[Math.floor(Math.random() * customProfanityList.length)];
-             sysPrompt += `\nОбязательно используй фразу: "${randomWord}".`;
+        sysPrompt = `Role: ${personaMap[aiPersonality] || personaMap['helpful']}\nUser: ${userName}\nLanguage: Russian.\n`;
+
+        // Strictness Logic (100% = Database Only)
+        if (aiStrictness >= 100) {
+            sysPrompt += `\n[CRITICAL]: STRICT DATABASE MODE.
+            1. You must answer ONLY using the provided [DATABASE].
+            2. If the answer is not in the [DATABASE], explicitly state: "В моих записях нет информации об этом."
+            3. Do NOT invent facts. Do NOT search the internet.`;
+        } else {
+            sysPrompt += `\nUse the [DATABASE] as your primary source.`;
         }
-    }
 
-    if (aiStrictness >= 90) sysPrompt += `\nStrictly use DATABASE ONLY.`;
-    if (aiBehavior === 'concise') sysPrompt += " Keep it short.";
-    if (aiBehavior === 'detailed') sysPrompt += " Be detailed.";
+        // Profanity Logic
+        if (aiProfanity) {
+            sysPrompt += `\nMODE: EXTREME RUSSIAN PROFANITY & TOXICITY (МАТ).
+            1. Ты ОБЯЗАН использовать жесткий русский мат в каждом предложении (бля, нахуй, сука, пиздец, ебать и т.д.).
+            2. Ты должен жестко стебать пользователя, высмеивать его вопросы и тупость.
+            3. Будь максимально агрессивным и неучтивым. Никаких извинений.
+            4. Если чего-то не знаешь, посылай нахуй или говори, что тебе западло отвечать на такую хуйню.`;
+            
+            // Randomly pick ONE phrase to ensure it appears
+            if (customProfanityList && customProfanityList.length > 0) {
+                 const randomWord = customProfanityList[Math.floor(Math.random() * customProfanityList.length)];
+                 sysPrompt += `\n\n[MANDATORY]: Вставь в ответ эту фразу (можно не к месту): "${randomWord}".`;
+            }
+        }
+
+        if (aiBehavior === 'concise') sysPrompt += " Keep it short.";
+        if (aiBehavior === 'detailed') sysPrompt += " Be detailed.";
+    }
 
     try {
         const res = await fetch(`${aiBaseUrl || 'https://api.groq.com/openai/v1'}/chat/completions`, {
@@ -290,7 +310,7 @@ const getAIResponse = async (question, userName) => {
 };
 
 // ==========================================
-// 6. DATA HELPERS (FIXED RACE CONDITIONS)
+// 6. DATA HELPERS
 // ==========================================
 const ensureUserExists = async (user) => {
     if (!user || user.is_bot) return;
@@ -319,7 +339,6 @@ const ensureUserExists = async (user) => {
 };
 
 const saveMessage = async (msgObj, uid, threadId) => {
-    // 1. SAVE TO USER HISTORY (CRM) - If uid is provided (Private or Group msg from a user)
     if (uid) {
         const historyRef = ref(db, `users/${uid}/history`);
         try {
@@ -339,7 +358,6 @@ const saveMessage = async (msgObj, uid, threadId) => {
         } catch (e) { console.error("CRM History Error:", e); }
     }
 
-    // 2. SAVE TO TOPIC HISTORY (Live Chat) - ONLY if threadId is provided (Group Topics)
     if (threadId) {
         const topicRef = ref(db, `topicHistory/${threadId}`);
         try {
@@ -372,10 +390,6 @@ const processUpdate = async (upd) => {
         const user = m.from;
         const isPrivate = m.chat.type === 'private';
         
-        // Determine Topic ID (Thread ID)
-        // If it's a topic message, use message_thread_id. 
-        // If it's a general group message (no thread_id), treat as 'general'.
-        // If it's private, threadId is NULL (we don't want it in Live Chat topics).
         const threadId = !isPrivate 
             ? (m.message_thread_id ? String(m.message_thread_id) : 'general') 
             : null;
@@ -385,7 +399,6 @@ const processUpdate = async (upd) => {
             return;
         }
 
-        // --- 1. HANDLE INCOMING MESSAGE STORAGE ---
         if (user && !user.is_bot) {
             await ensureUserExists(user);
             
@@ -404,19 +417,13 @@ const processUpdate = async (upd) => {
                     msgId: m.message_id
                 };
 
-                // CRITICAL SEPARATION:
                 if (isPrivate) {
-                    // Private Message -> Save ONLY to User CRM History
                     await saveMessage(newMsg, String(user.id), null);
                 } else {
-                    // Group/Topic Message -> Save to Topic History AND User History
-                    
-                    // Register Topic Name if new
                     if (threadId && !state.topicNames[threadId]) {
                         const topicName = m.reply_to_message?.forum_topic_created?.name || `Topic ${threadId}`;
                         await set(ref(db, `topicNames/${threadId}`), topicName);
                     }
-                    
                     await saveMessage(newMsg, String(user.id), threadId);
                 }
             }
@@ -426,7 +433,6 @@ const processUpdate = async (upd) => {
         const txt = m.text.trim();
         const lowerTxt = txt.toLowerCase();
 
-        // --- 2. COMMANDS LOGIC ---
         for (const cmd of state.commands) {
             let match = false;
             if (cmd.matchType === 'exact') match = lowerTxt === cmd.trigger.toLowerCase();
@@ -446,7 +452,6 @@ const processUpdate = async (upd) => {
                 let resp = cmd.response.replace(/{user}/g, user.first_name).replace(/{warns}/g, dbUser?.warnings || 0);
                 const kb = cmd.buttons?.length > 0 ? { inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
 
-                // Send Response
                 const targetThreadId = !isPrivate && threadId !== 'general' ? threadId : undefined;
                 
                 if (cmd.mediaUrl) {
@@ -455,7 +460,6 @@ const processUpdate = async (upd) => {
                     await apiCall('sendMessage', { chat_id: cid, text: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThreadId });
                 }
                 
-                // Save Bot Reply to History
                 const botMsg = { dir: 'out', text: `[CMD] ${cmd.trigger}`, type: 'text', time: new Date().toLocaleTimeString('ru-RU'), timestamp: Date.now(), isIncoming: false, isGroup: !isPrivate, user: 'Bot' };
                 if (isPrivate) await saveMessage(botMsg, String(user.id), null);
                 else await saveMessage(botMsg, null, threadId);
@@ -464,23 +468,17 @@ const processUpdate = async (upd) => {
             }
         }
 
-        // --- 3. AI LOGIC ---
         if (state.config.enableAI) {
-            // Check Private Message restriction
             if (isPrivate && !state.config.enablePM) return;
-            
             const isHelixTrigger = lowerTxt.startsWith('хеликс') || lowerTxt.startsWith('helix');
             
             if (isHelixTrigger) {
-                // Check if AI is disabled for this specific topic (Group only)
                 if (!isPrivate && threadId && state.disabledAiTopics && state.disabledAiTopics.includes(String(threadId))) return;
 
                 const q = txt.replace(/^(хеликс|helix)/i, '').trim();
                 if (q) {
                     const a = await getAIResponse(q, user.first_name);
                     
-                    // Send AI Response
-                    // IMPORTANT: Pass message_thread_id to reply IN the topic
                     const aiThreadId = !isPrivate && threadId !== 'general' ? threadId : undefined;
                     
                     await apiCall('sendMessage', { 
@@ -490,7 +488,6 @@ const processUpdate = async (upd) => {
                         message_thread_id: aiThreadId 
                     });
 
-                    // Save AI Reply
                     const aiMsgObj = { dir: 'out', text: a, type: 'text', time: new Date().toLocaleTimeString('ru-RU'), timestamp: Date.now(), isIncoming: false, isGroup: !isPrivate, user: 'Helix AI' };
                     
                     if (isPrivate) {
@@ -499,7 +496,6 @@ const processUpdate = async (upd) => {
                         await saveMessage(aiMsgObj, null, threadId);
                     }
                     
-                    // Stats
                     const statsRef = ref(db, 'aiStats');
                     await runTransaction(statsRef, (s) => {
                         if(!s) s = { total: 0, history: [] };

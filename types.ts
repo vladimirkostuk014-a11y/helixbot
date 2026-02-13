@@ -15,11 +15,12 @@ export interface BotConfig {
     aiPersonality: string; 
     aiBehavior: string;
     aiProfanity: boolean;
-    customProfanity?: string; // Legacy field, kept for compatibility
-    customProfanityList?: string[]; // New list field
+    customProfanity?: string; // Legacy field
+    customProfanityList?: string[]; // List of specific phrases/jokes
     aiTemperature: number;
     aiMaxTokens: number;
     aiStrictness: number; // 0 to 100 (Accuracy)
+    systemPromptOverride?: string; // NEW: Manual prompt override
     bannedWords: string;
 }
 

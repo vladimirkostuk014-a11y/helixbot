@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { User, AiStats, BotConfig, Group, LogEntry } from '../types';
 import { Icons } from './Icons';
-import { apiCall, getAIResponse } from '../services/api';
+import { apiCall, getAIResponse, generateSystemPrompt } from '../services/api';
 import { saveData } from '../services/firebase';
 
 const SETTINGS_HASH = "ODk1Mg==";
@@ -46,6 +46,9 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     const [isPlaygroundThinking, setIsPlaygroundThinking] = useState(false);
     const playgroundEndRef = useRef<HTMLDivElement>(null);
 
+    // Calculated Prompt State
+    const [currentSystemPrompt, setCurrentSystemPrompt] = useState('');
+
     const userArray: User[] = Object.values(users);
     const realUsers = userArray.filter(u => u.id > 0 && u.id !== 777000 && u.id !== 1087968824);
     const activeUsers = realUsers.filter(u => u.dailyMsgCount > 0).sort((a, b) => b.dailyMsgCount - a.dailyMsgCount);
@@ -55,6 +58,12 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
             playgroundEndRef.current.scrollIntoView({ behavior: 'smooth' });
         }
     }, [playgroundHistory, showPlayground, isPlaygroundThinking]);
+
+    // Update calculated prompt when settings change
+    useEffect(() => {
+        const prompt = generateSystemPrompt(config, 'User');
+        setCurrentSystemPrompt(prompt);
+    }, [config.aiPersonality, config.aiStrictness, config.aiProfanity, config.aiBehavior, config.customProfanityList, config.systemPromptOverride]);
 
     const handleSettingsLogin = (e: React.FormEvent) => {
         e.preventDefault();
@@ -86,6 +95,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     const handleSave = (section: 'ai' | 'ban') => {
         const cleanConfig = { ...config };
         if (cleanConfig.openaiApiKey) cleanConfig.openaiApiKey = cleanConfig.openaiApiKey.trim();
+        // cleanConfig.systemPromptOverride is already updated in state
         saveData('config', cleanConfig);
         setAiSaveStatus('Сохранено!');
         if (addLog) addLog('Настройки', `Обновлены настройки ${section === 'ai' ? 'AI' : 'Бан-лист'}`, 'info');
@@ -152,19 +162,14 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         saveData('config', newConfig); 
     };
 
-    // --- SIMPLIFIED BAR CHART LOGIC (Last 7 Days) ---
     const getSimpleChartData = () => {
         const today = new Date();
         const data = [];
-        
-        // Loop last 7 days
         for (let i = 6; i >= 0; i--) {
             const d = new Date(today);
             d.setDate(today.getDate() - i);
-            d.setHours(0,0,0,0); // normalize time
+            d.setHours(0,0,0,0);
             const label = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-            
-            // Count User Messages (Group & PM)
             let msgCount = 0;
             if (users) {
                 Object.values(users).forEach(u => {
@@ -173,32 +178,20 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                             if (!m.timestamp) return;
                             const msgDate = new Date(m.timestamp);
                             msgDate.setHours(0,0,0,0);
-                            
-                            if (msgDate.getTime() === d.getTime()) {
-                                msgCount++;
-                            }
+                            if (msgDate.getTime() === d.getTime()) msgCount++;
                         });
                     }
                 });
             }
-
-            // Count AI Responses
             let aiCount = 0;
             if (aiStats && aiStats.history) {
                 aiStats.history.forEach(stat => {
                     const statDate = new Date(stat.time);
                     statDate.setHours(0,0,0,0);
-                     if (statDate.getTime() === d.getTime()) {
-                        aiCount++;
-                     }
+                     if (statDate.getTime() === d.getTime()) aiCount++;
                 });
             }
-
-            data.push({
-                name: label,
-                users: msgCount,
-                ai: aiCount
-            });
+            data.push({ name: label, users: msgCount, ai: aiCount });
         }
         return data;
     };
@@ -262,7 +255,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                     
                     <div className="space-y-6 relative z-10 flex-1 overflow-y-auto custom-scrollbar pr-2 pb-20">
-                        {/* Settings Form Content (Same as before) */}
                         <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
                              <label className="text-xs text-gray-400 font-bold uppercase mb-2 block flex items-center gap-2">
                                 <Icons.Settings size={14}/> API Key (Groq/OpenAI)
@@ -286,10 +278,11 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                         
                         <div>
                             <div className="flex justify-between mb-1">
-                                <label className="text-xs text-gray-400 font-bold uppercase block">Точность (80-100%)</label>
+                                <label className="text-xs text-gray-400 font-bold uppercase block">Строгость / Точность (100% = Только База Знаний)</label>
                                 <span className={`text-xs font-bold ${config.aiStrictness >= 90 ? 'text-green-500' : 'text-yellow-500'}`}>{config.aiStrictness || 80}%</span>
                             </div>
                             <input type="range" min="0" max="100" step="10" value={config.aiStrictness || 80} onChange={e => setConfig({...config, aiStrictness: parseInt(e.target.value)})} className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"/>
+                            {config.aiStrictness >= 100 && <p className="text-[10px] text-green-400 mt-1">✅ Режим максимальной строгости: Бот отвечает ТОЛЬКО по базе.</p>}
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -314,11 +307,70 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                             </div>
                         </div>
 
-                        <div className="flex flex-wrap gap-4">
+                        {/* System Prompt Editor */}
+                        <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
+                             <div className="flex justify-between items-center mb-2">
+                                 <label className="text-xs text-gray-400 font-bold uppercase flex items-center gap-2">
+                                    <Icons.FileText size={14}/> Системный Промт (Инструкция)
+                                 </label>
+                                 {(config.systemPromptOverride && config.systemPromptOverride.length > 0) ? (
+                                     <span className="text-[10px] bg-red-900/50 text-red-200 px-2 py-0.5 rounded border border-red-800">РУЧНОЙ РЕЖИМ</span>
+                                 ) : (
+                                     <span className="text-[10px] bg-blue-900/50 text-blue-200 px-2 py-0.5 rounded border border-blue-800">АВТОМАТИЧЕСКИЙ</span>
+                                 )}
+                             </div>
+                             <p className="text-[10px] text-gray-500 mb-2">Это то, что бот видит перед каждым сообщением. Вы можете вручную изменить это.</p>
+                             <textarea 
+                                value={currentSystemPrompt}
+                                onChange={e => {
+                                    setCurrentSystemPrompt(e.target.value);
+                                    setConfig({...config, systemPromptOverride: e.target.value});
+                                }}
+                                className={`w-full bg-black border rounded-lg p-3 text-white text-xs font-mono h-40 focus:border-purple-500 outline-none leading-relaxed ${config.systemPromptOverride ? 'border-purple-500' : 'border-gray-700 opacity-80'}`}
+                             />
+                             {config.systemPromptOverride && (
+                                 <div className="flex justify-end mt-2">
+                                     <button onClick={() => {
+                                         const auto = generateSystemPrompt({...config, systemPromptOverride: undefined}, 'User');
+                                         setConfig({...config, systemPromptOverride: ''});
+                                         setCurrentSystemPrompt(auto);
+                                     }} className="text-xs text-red-400 hover:text-white underline">Сбросить до автоматического</button>
+                                 </div>
+                             )}
+                        </div>
+
+                        <div className="flex flex-col gap-4">
                             <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-gray-900/50 border border-gray-700">
                                 <input type="checkbox" checked={config.aiProfanity || false} onChange={e => setConfig({...config, aiProfanity: e.target.checked})} className="accent-red-500 w-5 h-5"/>
-                                <span className="text-sm text-red-300 font-bold">🤬 Токсичность</span>
+                                <span className="text-sm text-red-300 font-bold">🤬 Токсичность (Мат)</span>
                             </label>
+
+                            {/* Custom Profanity List */}
+                            {config.aiProfanity && (
+                                <div className="bg-red-900/10 border border-red-900/30 p-4 rounded-xl">
+                                    <label className="text-xs text-red-400 font-bold uppercase mb-2 block">Словарь токсика (Обязательное использование)</label>
+                                    <div className="flex gap-2 mb-2">
+                                        <input 
+                                            value={newProfanityWord} 
+                                            onChange={e => setNewProfanityWord(e.target.value)} 
+                                            onKeyDown={e => e.key === 'Enter' && handleAddProfanity()}
+                                            placeholder="Напр: возьми микрозайм" 
+                                            className="flex-1 bg-black border border-gray-700 rounded px-3 py-1 text-sm text-white"
+                                        />
+                                        <button onClick={handleAddProfanity} className="bg-red-900/50 text-red-200 px-3 py-1 rounded border border-red-800 text-xs font-bold">Добавить</button>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {(config.customProfanityList || []).map((word, i) => (
+                                            <span key={i} className="bg-red-900/20 text-red-300 px-2 py-1 rounded text-xs border border-red-900/40 flex items-center gap-2">
+                                                {word}
+                                                <button onClick={() => handleRemoveProfanity(word)} className="hover:text-white"><Icons.X size={10}/></button>
+                                            </span>
+                                        ))}
+                                        {(!config.customProfanityList || config.customProfanityList.length === 0) && <span className="text-xs text-gray-500 italic">Список пуст</span>}
+                                    </div>
+                                </div>
+                            )}
+
                             <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-gray-900/50 border border-gray-700">
                                 <input type="checkbox" checked={config.enablePM || false} onChange={e => setConfig({...config, enablePM: e.target.checked})} className="accent-blue-500 w-5 h-5"/>
                                 <span className="text-sm text-blue-300 font-bold">📩 Отвечать в ЛС</span>
@@ -365,6 +417,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
             </div>
         );
     }
+    
+    // ... rest of the component (KPICards, Charts, etc. remains unchanged)
     
     return (
         <div className="space-y-8 relative">

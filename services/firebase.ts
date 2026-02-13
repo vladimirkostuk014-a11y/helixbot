@@ -1,5 +1,5 @@
 // services/firebase.ts
-import { initializeApp } from "firebase/app";
+import * as firebaseApp from "firebase/app";
 import { getDatabase, ref, set, onValue, remove, update } from "firebase/database";
 
 // ==========================================
@@ -16,7 +16,10 @@ const firebaseConfig = {
 };
 
 // Инициализация
-const app = initializeApp(firebaseConfig);
+// Handle both named export (v9) and default export (compat/v8 interop) cases safely
+const initApp = (firebaseApp as any).initializeApp || (firebaseApp as any).default?.initializeApp;
+const app = initApp(firebaseConfig);
+
 export const db = getDatabase(app);
 
 console.log("🔥 Connected to Firebase Realtime Database: helixbotdb");
