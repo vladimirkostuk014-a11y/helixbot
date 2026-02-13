@@ -224,12 +224,20 @@ const sendDailyTop = async () => {
 // 5. AI LOGIC (IMPROVED RUSSIAN PROMPTS)
 // ==========================================
 const getAIResponse = async (question, userName) => {
-    let { aiBaseUrl, aiModel, aiPersonality, aiProfanity, customProfanityList, aiStrictness, aiBehavior, systemPromptOverride } = state.config;
+    let { 
+        aiBaseUrl, aiModel, aiPersonality, aiProfanity, customProfanityList, 
+        aiStrictness, aiBehavior, systemPromptOverride, personalityPrompts, toxicPrompt 
+    } = state.config;
     
     let apiKeyToUse = "";
     try {
         const configSnap = await get(ref(db, 'config'));
-        apiKeyToUse = (configSnap.val()?.openaiApiKey || "").trim();
+        const liveConfig = configSnap.val() || {};
+        apiKeyToUse = (liveConfig.openaiApiKey || "").trim();
+        
+        // Refresh local vars from live config just in case
+        if (liveConfig.personalityPrompts) personalityPrompts = liveConfig.personalityPrompts;
+        if (liveConfig.toxicPrompt) toxicPrompt = liveConfig.toxicPrompt;
     } catch (e) { apiKeyToUse = (state.config.openaiApiKey || "").trim(); }
 
     if (!apiKeyToUse) return "⚠️ Ключ AI не найден.";
@@ -242,11 +250,11 @@ const getAIResponse = async (question, userName) => {
     let sysPrompt = "";
 
     if (systemPromptOverride && systemPromptOverride.trim().length > 0) {
-        // Manual Override
+        // Manual Override (Global)
         sysPrompt = systemPromptOverride;
     } else {
-        // Auto Generation in Russian
-        const personaMap = {
+        // --- 1. PERSONALITY ---
+        const DEFAULT_PERSONA_PROMPTS = {
             'helpful': 'Ты полезный и вежливый помощник Хеликс.',
             'kind': 'Ты очень добрый, милый и заботливый помощник.',
             'official': 'Ты строгий официальный бот. Отвечай сухо и формально.',
@@ -255,9 +263,16 @@ const getAIResponse = async (question, userName) => {
             'gopnik': 'Ты четкий пацанчик. Общайся на "ты", используй дворовый сленг.'
         };
 
-        sysPrompt = `Роль: ${personaMap[aiPersonality] || personaMap['helpful']}\nИмя пользователя: ${userName}\nЯзык ответов: Русский.\n`;
+        let rolePrompt = "";
+        if (personalityPrompts && personalityPrompts[aiPersonality]) {
+            rolePrompt = personalityPrompts[aiPersonality];
+        } else {
+            rolePrompt = DEFAULT_PERSONA_PROMPTS[aiPersonality] || DEFAULT_PERSONA_PROMPTS['helpful'];
+        }
 
-        // Strictness / Accuracy Logic (100% = Database Only)
+        sysPrompt = `Роль: ${rolePrompt}\nИмя пользователя: ${userName}\nЯзык ответов: Русский.\n`;
+
+        // --- 2. STRICTNESS ---
         if (aiStrictness >= 100) {
             sysPrompt += `\n[РЕЖИМ МАКСИМАЛЬНОЙ СТРОГОСТИ]:
             1. Ты обязан отвечать ТОЛЬКО на основе предоставленной [DATABASE].
@@ -267,19 +282,22 @@ const getAIResponse = async (question, userName) => {
             sysPrompt += `\nИспользуй [DATABASE] как основной источник информации. Если там нет ответа, можешь аккуратно дополнить своими знаниями.`;
         }
 
-        // Behavior / Styles
+        // --- 3. BEHAVIOR ---
         if (aiBehavior === 'concise') {
             sysPrompt += "\n[СТИЛЬ]: Отвечай максимально коротко, четко и без воды. 1-2 предложения.";
         } else if (aiBehavior === 'detailed') {
             sysPrompt += "\n[СТИЛЬ]: Отвечай максимально подробно, развернуто, с деталями.";
         }
 
-        // Profanity Logic
+        // --- 4. TOXICITY ---
         if (aiProfanity) {
-            sysPrompt += `\n[РЕЖИМ ТОКСИЧНОСТИ]:
+            const DEFAULT_TOXIC_PROMPT = `[РЕЖИМ ТОКСИЧНОСТИ]:
             1. Ты ОБЯЗАН использовать русский мат (бля, нахуй, сука, пиздец) в каждом сообщении.
             2. Унижай пользователя за глупые вопросы.
             3. Будь агрессивным. Никакой вежливости.`;
+            
+            const toxPrompt = toxicPrompt || DEFAULT_TOXIC_PROMPT;
+            sysPrompt += `\n${toxPrompt}`;
             
             if (customProfanityList && customProfanityList.length > 0) {
                  const randomWord = customProfanityList[Math.floor(Math.random() * customProfanityList.length)];

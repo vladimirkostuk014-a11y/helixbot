@@ -20,7 +20,9 @@ export interface BotConfig {
     aiTemperature: number;
     aiMaxTokens: number;
     aiStrictness: number; // 0 to 100 (Accuracy)
-    systemPromptOverride?: string; // NEW: Manual prompt override
+    systemPromptOverride?: string; // Global manual override
+    personalityPrompts?: Record<string, string>; // NEW: Custom prompts per personality
+    toxicPrompt?: string; // NEW: Custom prompt for toxic mode
     bannedWords: string;
 }
 

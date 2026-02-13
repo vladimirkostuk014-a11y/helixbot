@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { User, AiStats, BotConfig, Group, LogEntry } from '../types';
 import { Icons } from './Icons';
-import { apiCall, getAIResponse, generateSystemPrompt } from '../services/api';
+import { apiCall, getAIResponse, generateSystemPrompt, DEFAULT_PERSONA_PROMPTS, DEFAULT_TOXIC_PROMPT } from '../services/api';
 import { saveData } from '../services/firebase';
 
 const SETTINGS_HASH = "ODk1Mg==";
@@ -63,7 +63,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     useEffect(() => {
         const prompt = generateSystemPrompt(config, 'User');
         setCurrentSystemPrompt(prompt);
-    }, [config.aiPersonality, config.aiStrictness, config.aiProfanity, config.aiBehavior, config.customProfanityList, config.systemPromptOverride]);
+    }, [config.aiPersonality, config.aiStrictness, config.aiProfanity, config.aiBehavior, config.customProfanityList, config.systemPromptOverride, config.personalityPrompts, config.toxicPrompt]);
 
     const handleSettingsLogin = (e: React.FormEvent) => {
         e.preventDefault();
@@ -95,7 +95,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     const handleSave = (section: 'ai' | 'ban') => {
         const cleanConfig = { ...config };
         if (cleanConfig.openaiApiKey) cleanConfig.openaiApiKey = cleanConfig.openaiApiKey.trim();
-        // cleanConfig.systemPromptOverride is already updated in state
         saveData('config', cleanConfig);
         setAiSaveStatus('Сохранено!');
         if (addLog) addLog('Настройки', `Обновлены настройки ${section === 'ai' ? 'AI' : 'Бан-лист'}`, 'info');
@@ -255,27 +254,77 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                     
                     <div className="space-y-6 relative z-10 flex-1 overflow-y-auto custom-scrollbar pr-2 pb-20">
-                        <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
-                             <label className="text-xs text-gray-400 font-bold uppercase mb-2 block flex items-center gap-2">
-                                <Icons.Settings size={14}/> API Key (Groq/OpenAI)
-                             </label>
-                             <input 
-                                value={config.openaiApiKey || ''}
-                                onChange={e => setConfig({...config, openaiApiKey: e.target.value})}
-                                type="password"
-                                placeholder="gsk_..."
-                                className="w-full bg-black border border-gray-600 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none"
-                             />
+                        {/* 1. KEY & MODEL */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
+                                 <label className="text-xs text-gray-400 font-bold uppercase mb-2 block flex items-center gap-2">
+                                    <Icons.Settings size={14}/> API Key (Groq/OpenAI)
+                                 </label>
+                                 <input 
+                                    value={config.openaiApiKey || ''}
+                                    onChange={e => setConfig({...config, openaiApiKey: e.target.value})}
+                                    type="password"
+                                    placeholder="gsk_..."
+                                    className="w-full bg-black border border-gray-600 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none"
+                                 />
+                            </div>
+                            <div>
+                                <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Модель AI</label>
+                                <select value={config.aiModel || 'llama-3.3-70b-versatile'} onChange={e => setConfig({...config, aiModel: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
+                                    <option value="llama-3.3-70b-versatile">🧠 Llama 3.3 70B (Основная)</option>
+                                    <option value="llama-3.1-8b-instant">⚡ Llama 3.1 8B (Быстрая)</option>
+                                </select>
+                                <div className="mt-4">
+                                    <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Ответ</label>
+                                    <select value={config.aiBehavior || 'balanced'} onChange={e => setConfig({...config, aiBehavior: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
+                                        <option value="balanced">⚖️ Обычный</option>
+                                        <option value="concise">⚡ Короткий</option>
+                                        <option value="detailed">📜 Подробный</option>
+                                    </select>
+                                </div>
+                            </div>
                         </div>
 
-                        <div>
-                            <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Модель AI</label>
-                            <select value={config.aiModel || 'llama-3.3-70b-versatile'} onChange={e => setConfig({...config, aiModel: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
-                                <option value="llama-3.3-70b-versatile">🧠 Llama 3.3 70B (Основная)</option>
-                                <option value="llama-3.1-8b-instant">⚡ Llama 3.1 8B (Быстрая)</option>
-                            </select>
+                        {/* 2. PERSONALITY SETTINGS */}
+                        <div className="bg-blue-900/10 p-4 rounded-xl border border-blue-900/30">
+                            <div className="mb-4">
+                                <label className="text-xs text-blue-400 font-bold uppercase mb-1 block">Личность Бота</label>
+                                <select value={config.aiPersonality || 'helpful'} onChange={e => setConfig({...config, aiPersonality: e.target.value})} className="w-full bg-black border border-blue-800 rounded-lg p-2.5 text-white text-sm focus:border-blue-500 outline-none transition-colors">
+                                    <option value="helpful">😄 Хеликс (Полезный)</option>
+                                    <option value="kind">💖 Добряк</option>
+                                    <option value="official">🧐 Официальный</option>
+                                    <option value="joker">🤡 Шутник</option>
+                                    <option value="angry">😡 Злой</option>
+                                    <option value="gopnik">🍺 Гопник</option>
+                                </select>
+                            </div>
+
+                            {/* GRANULAR PERSONALITY PROMPT */}
+                            <div>
+                                <div className="flex justify-between items-center mb-1">
+                                    <label className="text-xs text-gray-400 font-bold uppercase block">Промт Личности (Инструкция)</label>
+                                    {config.personalityPrompts && config.personalityPrompts[config.aiPersonality] && (
+                                        <button onClick={() => {
+                                            const newPrompts = { ...config.personalityPrompts };
+                                            delete newPrompts[config.aiPersonality];
+                                            setConfig({ ...config, personalityPrompts: newPrompts });
+                                        }} className="text-[10px] text-red-400 hover:underline">Сбросить до стандартного</button>
+                                    )}
+                                </div>
+                                <textarea 
+                                    value={config.personalityPrompts?.[config.aiPersonality] || DEFAULT_PERSONA_PROMPTS[config.aiPersonality] || DEFAULT_PERSONA_PROMPTS['helpful']}
+                                    onChange={e => {
+                                        const newPrompts = { ...(config.personalityPrompts || {}), [config.aiPersonality]: e.target.value };
+                                        setConfig({ ...config, personalityPrompts: newPrompts });
+                                    }}
+                                    className="w-full bg-black border border-gray-700 rounded-lg p-3 text-white text-xs font-mono h-24 focus:border-blue-500 outline-none leading-relaxed"
+                                    placeholder="Опишите, как должен вести себя бот в этом режиме..."
+                                />
+                                <p className="text-[10px] text-gray-500 mt-1">Этот текст заменяет стандартное описание для выбранной личности.</p>
+                            </div>
                         </div>
                         
+                        {/* 3. STRICTNESS */}
                         <div>
                             <div className="flex justify-between mb-1">
                                 <label className="text-xs text-gray-400 font-bold uppercase block">Строгость / Точность (100% = Только База Знаний)</label>
@@ -285,96 +334,78 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                             {config.aiStrictness >= 100 && <p className="text-[10px] text-green-400 mt-1">✅ Режим максимальной строгости: Бот отвечает ТОЛЬКО по базе.</p>}
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Личность</label>
-                                <select value={config.aiPersonality || 'helpful'} onChange={e => setConfig({...config, aiPersonality: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
-                                    <option value="helpful">😄 Хеликс</option>
-                                    <option value="kind">💖 Добряк</option>
-                                    <option value="official">🧐 Официальный</option>
-                                    <option value="joker">🤡 Шутник</option>
-                                    <option value="angry">😡 Злой</option>
-                                    <option value="gopnik">🍺 Гопник</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Ответ</label>
-                                <select value={config.aiBehavior || 'balanced'} onChange={e => setConfig({...config, aiBehavior: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
-                                    <option value="balanced">⚖️ Обычный</option>
-                                    <option value="concise">⚡ Короткий</option>
-                                    <option value="detailed">📜 Подробный</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        {/* System Prompt Editor */}
-                        <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
-                             <div className="flex justify-between items-center mb-2">
-                                 <label className="text-xs text-gray-400 font-bold uppercase flex items-center gap-2">
-                                    <Icons.FileText size={14}/> Системный Промт (Инструкция)
-                                 </label>
-                                 {(config.systemPromptOverride && config.systemPromptOverride.length > 0) ? (
-                                     <span className="text-[10px] bg-red-900/50 text-red-200 px-2 py-0.5 rounded border border-red-800">РУЧНОЙ РЕЖИМ</span>
-                                 ) : (
-                                     <span className="text-[10px] bg-blue-900/50 text-blue-200 px-2 py-0.5 rounded border border-blue-800">АВТОМАТИЧЕСКИЙ</span>
-                                 )}
-                             </div>
-                             <p className="text-[10px] text-gray-500 mb-2">Это то, что бот видит перед каждым сообщением. Вы можете вручную изменить это.</p>
-                             <textarea 
-                                value={currentSystemPrompt}
-                                onChange={e => {
-                                    setCurrentSystemPrompt(e.target.value);
-                                    setConfig({...config, systemPromptOverride: e.target.value});
-                                }}
-                                className={`w-full bg-black border rounded-lg p-3 text-white text-xs font-mono h-40 focus:border-purple-500 outline-none leading-relaxed ${config.systemPromptOverride ? 'border-purple-500' : 'border-gray-700 opacity-80'}`}
-                             />
-                             {config.systemPromptOverride && (
-                                 <div className="flex justify-end mt-2">
-                                     <button onClick={() => {
-                                         const auto = generateSystemPrompt({...config, systemPromptOverride: undefined}, 'User');
-                                         setConfig({...config, systemPromptOverride: ''});
-                                         setCurrentSystemPrompt(auto);
-                                     }} className="text-xs text-red-400 hover:text-white underline">Сбросить до автоматического</button>
-                                 </div>
-                             )}
-                        </div>
-
-                        <div className="flex flex-col gap-4">
-                            <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-gray-900/50 border border-gray-700">
+                        {/* 4. TOXICITY SETTINGS */}
+                        <div className={`p-4 rounded-xl border transition-colors ${config.aiProfanity ? 'bg-red-900/10 border-red-900/30' : 'bg-gray-900/50 border-gray-700'}`}>
+                            <label className="flex items-center gap-3 cursor-pointer mb-4">
                                 <input type="checkbox" checked={config.aiProfanity || false} onChange={e => setConfig({...config, aiProfanity: e.target.checked})} className="accent-red-500 w-5 h-5"/>
                                 <span className="text-sm text-red-300 font-bold">🤬 Токсичность (Мат)</span>
                             </label>
 
-                            {/* Custom Profanity List */}
                             {config.aiProfanity && (
-                                <div className="bg-red-900/10 border border-red-900/30 p-4 rounded-xl">
-                                    <label className="text-xs text-red-400 font-bold uppercase mb-2 block">Словарь токсика (Обязательное использование)</label>
-                                    <div className="flex gap-2 mb-2">
-                                        <input 
-                                            value={newProfanityWord} 
-                                            onChange={e => setNewProfanityWord(e.target.value)} 
-                                            onKeyDown={e => e.key === 'Enter' && handleAddProfanity()}
-                                            placeholder="Напр: возьми микрозайм" 
-                                            className="flex-1 bg-black border border-gray-700 rounded px-3 py-1 text-sm text-white"
+                                <div className="space-y-4 animate-slideIn">
+                                    {/* GRANULAR TOXIC PROMPT */}
+                                    <div>
+                                        <div className="flex justify-between items-center mb-1">
+                                            <label className="text-xs text-red-400 font-bold uppercase block">Промт Токсичности</label>
+                                            {config.toxicPrompt && (
+                                                <button onClick={() => setConfig({ ...config, toxicPrompt: undefined })} className="text-[10px] text-gray-400 hover:text-white underline">Сбросить</button>
+                                            )}
+                                        </div>
+                                        <textarea 
+                                            value={config.toxicPrompt || DEFAULT_TOXIC_PROMPT}
+                                            onChange={e => setConfig({ ...config, toxicPrompt: e.target.value })}
+                                            className="w-full bg-black border border-red-900/50 rounded-lg p-3 text-red-100 text-xs font-mono h-24 focus:border-red-500 outline-none leading-relaxed"
                                         />
-                                        <button onClick={handleAddProfanity} className="bg-red-900/50 text-red-200 px-3 py-1 rounded border border-red-800 text-xs font-bold">Добавить</button>
                                     </div>
-                                    <div className="flex flex-wrap gap-2">
-                                        {(config.customProfanityList || []).map((word, i) => (
-                                            <span key={i} className="bg-red-900/20 text-red-300 px-2 py-1 rounded text-xs border border-red-900/40 flex items-center gap-2">
-                                                {word}
-                                                <button onClick={() => handleRemoveProfanity(word)} className="hover:text-white"><Icons.X size={10}/></button>
-                                            </span>
-                                        ))}
-                                        {(!config.customProfanityList || config.customProfanityList.length === 0) && <span className="text-xs text-gray-500 italic">Список пуст</span>}
+
+                                    {/* Custom Profanity List */}
+                                    <div>
+                                        <label className="text-xs text-red-400 font-bold uppercase mb-2 block">Словарь токсика (Обязательное использование)</label>
+                                        <div className="flex gap-2 mb-2">
+                                            <input 
+                                                value={newProfanityWord} 
+                                                onChange={e => setNewProfanityWord(e.target.value)} 
+                                                onKeyDown={e => e.key === 'Enter' && handleAddProfanity()}
+                                                placeholder="Напр: возьми микрозайм" 
+                                                className="flex-1 bg-black border border-gray-700 rounded px-3 py-1 text-sm text-white"
+                                            />
+                                            <button onClick={handleAddProfanity} className="bg-red-900/50 text-red-200 px-3 py-1 rounded border border-red-800 text-xs font-bold">Добавить</button>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2">
+                                            {(config.customProfanityList || []).map((word, i) => (
+                                                <span key={i} className="bg-red-900/20 text-red-300 px-2 py-1 rounded text-xs border border-red-900/40 flex items-center gap-2">
+                                                    {word}
+                                                    <button onClick={() => handleRemoveProfanity(word)} className="hover:text-white"><Icons.X size={10}/></button>
+                                                </span>
+                                            ))}
+                                        </div>
                                     </div>
                                 </div>
                             )}
-
-                            <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl bg-gray-900/50 border border-gray-700">
-                                <input type="checkbox" checked={config.enablePM || false} onChange={e => setConfig({...config, enablePM: e.target.checked})} className="accent-blue-500 w-5 h-5"/>
-                                <span className="text-sm text-blue-300 font-bold">📩 Отвечать в ЛС</span>
-                            </label>
+                        </div>
+                        
+                        {/* 5. GLOBAL OVERRIDE (Hidden/Advanced or Just Collapsed? Keeping it visible but less prominent) */}
+                        <div className="bg-gray-900/30 p-4 rounded-xl border border-gray-800">
+                             <div className="flex justify-between items-center mb-2">
+                                 <label className="text-xs text-gray-500 font-bold uppercase flex items-center gap-2">
+                                    <Icons.FileText size={14}/> Системный Промт (Глобальный Override)
+                                 </label>
+                                 {(config.systemPromptOverride && config.systemPromptOverride.length > 0) && (
+                                     <span className="text-[10px] bg-red-900/50 text-red-200 px-2 py-0.5 rounded border border-red-800">АКТИВЕН</span>
+                                 )}
+                             </div>
+                             <p className="text-[10px] text-gray-600 mb-2">Если здесь есть текст, он полностью заменит все настройки выше (личность, мат, базу данных). Оставьте пустым для авто-режима.</p>
+                             <textarea 
+                                value={config.systemPromptOverride || ''}
+                                onChange={e => setConfig({...config, systemPromptOverride: e.target.value})}
+                                className={`w-full bg-black border rounded-lg p-3 text-white text-xs font-mono h-20 focus:border-purple-500 outline-none leading-relaxed ${config.systemPromptOverride ? 'border-purple-500' : 'border-gray-800 opacity-60'}`}
+                                placeholder="Ручной режим (для экспертов)..."
+                             />
+                             {config.systemPromptOverride && (
+                                 <div className="flex justify-end mt-2">
+                                     <button onClick={() => setConfig({...config, systemPromptOverride: ''})} className="text-xs text-red-400 hover:text-white underline">Сбросить до автоматического</button>
+                                 </div>
+                             )}
                         </div>
 
                          <div className="flex gap-2 pt-4">

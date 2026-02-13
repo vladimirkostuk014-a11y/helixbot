@@ -49,28 +49,40 @@ const performAiRequest = async (apiKey: string, config: BotConfig, messages: any
     });
 };
 
+// --- DEFAULT PROMPTS ---
+export const DEFAULT_PERSONA_PROMPTS: Record<string, string> = {
+    'helpful': 'Ты полезный и вежливый помощник Хеликс.',
+    'kind': 'Ты очень добрый, милый и заботливый помощник.',
+    'official': 'Ты строгий официальный бот. Отвечай сухо и формально.',
+    'joker': 'Ты стендап-комик. Постоянно шути, используй сарказм.',
+    'angry': 'Ты злой бот. Ты ненавидишь глупые вопросы и людей.',
+    'gopnik': 'Ты четкий пацанчик. Общайся на "ты", используй дворовый сленг.'
+};
+
+export const DEFAULT_TOXIC_PROMPT = `[РЕЖИМ ТОКСИЧНОСТИ]:
+1. Ты ОБЯЗАН использовать русский мат (бля, нахуй, сука, пиздец) в каждом сообщении.
+2. Унижай пользователя за глупые вопросы.
+3. Будь агрессивным. Никакой вежливости.`;
+
 // SHARED PROMPT GENERATION LOGIC (RUSSIAN)
 export const generateSystemPrompt = (config: BotConfig, userName: string = 'User'): string => {
-    // 1. Manual Override
+    // 1. Manual Global Override (if set, ignores everything else)
     if (config.systemPromptOverride && config.systemPromptOverride.trim().length > 0) {
         return config.systemPromptOverride;
     }
 
-    // 2. Auto Generation
+    // 2. Personality Prompt (Custom or Default)
+    let rolePrompt = "";
+    if (config.personalityPrompts && config.personalityPrompts[config.aiPersonality]) {
+        rolePrompt = config.personalityPrompts[config.aiPersonality];
+    } else {
+        rolePrompt = DEFAULT_PERSONA_PROMPTS[config.aiPersonality] || DEFAULT_PERSONA_PROMPTS['helpful'];
+    }
+
+    let sysPrompt = `Роль: ${rolePrompt}\nИмя пользователя: ${userName}\nЯзык ответов: Русский.\n`;
+
+    // 3. Strictness / Accuracy Logic
     const strictLevel = config.aiStrictness || 80;
-    
-    const personaMap: Record<string, string> = {
-        'helpful': 'Ты полезный и вежливый помощник Хеликс.',
-        'kind': 'Ты очень добрый, милый и заботливый помощник.',
-        'official': 'Ты строгий официальный бот. Отвечай сухо и формально.',
-        'joker': 'Ты стендап-комик. Постоянно шути, используй сарказм.',
-        'angry': 'Ты злой бот. Ты ненавидишь глупые вопросы и людей.',
-        'gopnik': 'Ты четкий пацанчик. Общайся на "ты", используй дворовый сленг.'
-    };
-
-    let sysPrompt = `Роль: ${personaMap[config.aiPersonality] || personaMap['helpful']}\nИмя пользователя: ${userName}\nЯзык ответов: Русский.\n`;
-
-    // Strictness / Accuracy Logic
     if (strictLevel >= 100) {
         sysPrompt += `\n[РЕЖИМ МАКСИМАЛЬНОЙ СТРОГОСТИ]:
         1. Ты обязан отвечать ТОЛЬКО на основе предоставленной [DATABASE].
@@ -80,19 +92,17 @@ export const generateSystemPrompt = (config: BotConfig, userName: string = 'User
         sysPrompt += `\nИспользуй [DATABASE] как основной источник информации. Если там нет ответа, можешь аккуратно дополнить своими знаниями.`;
     }
 
-    // Styles (Behavior)
+    // 4. Styles (Behavior)
     if (config.aiBehavior === 'concise') {
         sysPrompt += "\n[СТИЛЬ]: Отвечай максимально коротко, четко и без воды. 1-2 предложения.";
     } else if (config.aiBehavior === 'detailed') {
         sysPrompt += "\n[СТИЛЬ]: Отвечай максимально подробно, развернуто, с деталями.";
     }
 
-    // Profanity / Toxic Logic
+    // 5. Profanity / Toxic Logic
     if (config.aiProfanity) {
-        sysPrompt += `\n[РЕЖИМ ТОКСИЧНОСТИ]:
-        1. Ты ОБЯЗАН использовать русский мат (бля, нахуй, сука, пиздец) в каждом сообщении.
-        2. Унижай пользователя за глупые вопросы.
-        3. Будь агрессивным. Никакой вежливости.`;
+        const toxicPrompt = config.toxicPrompt || DEFAULT_TOXIC_PROMPT;
+        sysPrompt += `\n${toxicPrompt}`;
         
         if (config.customProfanityList && config.customProfanityList.length > 0) {
             const words = config.customProfanityList.join('", "');
