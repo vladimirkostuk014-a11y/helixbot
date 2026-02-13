@@ -38,25 +38,21 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
         setExcludedIds(newSet);
     };
 
-    // FIX 7: Filter valid users (not banned AND ID > 0 to exclude groups)
+    // Filter valid users (not banned AND ID > 0 to exclude groups)
     const validUsers = (Object.values(users) as User[])
         .filter(u => u.status !== 'banned' && u.id > 0) 
         .sort((a, b) => {
-            // 1. Admins First
             if (a.role === 'admin' && b.role !== 'admin') return -1;
             if (a.role !== 'admin' && b.role === 'admin') return 1;
-            // 2. Then Alphabetical by Name
             return a.name.localeCompare(b.name);
         });
 
-    // Displayed users (filtered by search)
     const displayedUsers = validUsers.filter(u => 
         u.name.toLowerCase().includes(filterSearch.toLowerCase()) || 
         String(u.id).includes(filterSearch) ||
         (u.username && u.username.toLowerCase().includes(filterSearch.toLowerCase()))
     );
 
-    // Target users for broadcast (not excluded)
     const targetUsers = validUsers.filter(u => !excludedIds.has(u.id));
 
     const startBroadcast = async () => {
@@ -68,16 +64,19 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
         setProgress({ sent: 0, total: targetUsers.length, failed: 0 });
         if (addLog) addLog('Рассылка', `Старт рассылки (${targetUsers.length} получателей)`, 'warning');
 
-        // Prepare Markup Correctly
-        const markup = buttons.length > 0 ? JSON.stringify({ 
+        // Prepare Markup: Object is created here, stringification happens in apiCall for non-formdata, 
+        // or inside apiCall special logic for FormData if needed, but client-side we stringify for FormData usually.
+        // Wait, for FormData in browser, we typically append JSON string.
+        const markupObject = buttons.length > 0 ? { 
             inline_keyboard: buttons.map(b => {
                 let url = b.url;
                 if (url && !url.startsWith('http')) url = `https://${url}`;
                 return [ url ? { text: b.text, url } : { text: b.text, callback_data: 'cb' } ];
             }) 
-        }) : undefined;
+        } : undefined;
         
-        // Prepare preview URL for CRM (local only)
+        const markupString = markupObject ? JSON.stringify(markupObject) : undefined;
+        
         const previewUrl = mediaFile ? URL.createObjectURL(mediaFile) : undefined;
         const msgType = mediaFile ? (mediaFile.type.startsWith('video') ? 'video' : 'photo') : 'text';
 
@@ -90,20 +89,19 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
                     const method = mediaFile.type.startsWith('video') ? 'sendVideo' : 'sendPhoto';
                     fd.append(method === 'sendVideo' ? 'video' : 'photo', mediaFile);
                     if (text) fd.append('caption', text);
-                    if (markup) fd.append('reply_markup', markup);
+                    if (markupString) fd.append('reply_markup', markupString); // Must be string for FormData
                     res = await apiCall(method, fd, config, true);
                 } else {
                     res = await apiCall('sendMessage', { 
                         chat_id: user.id, 
                         text, 
-                        reply_markup: markup ? JSON.parse(markup) : undefined 
+                        reply_markup: markupObject // Pass object, apiCall handles stringify for JSON body
                     }, config);
                 }
 
                 if (res.ok) {
                     setProgress(p => ({ ...p, sent: p.sent + 1 }));
                     
-                    // --- SYNC WITH CRM HISTORY ---
                     const newMsg: Message = {
                         dir: 'out',
                         text: text,

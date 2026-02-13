@@ -43,7 +43,7 @@ const performAiRequest = async (apiKey: string, config: BotConfig, messages: any
         body: JSON.stringify({
             model: config.aiModel || "llama-3.3-70b-versatile",
             messages: messages,
-            temperature: config.aiProfanity ? 0.9 : 0.1, 
+            temperature: config.aiProfanity ? 1.2 : 0.2, // Increased chaos for toxic mode
             max_tokens: 800,
         })
     });
@@ -59,10 +59,11 @@ export const DEFAULT_PERSONA_PROMPTS: Record<string, string> = {
     'gopnik': 'Ты четкий пацанчик. Общайся на "ты", используй дворовый сленг.'
 };
 
-export const DEFAULT_TOXIC_PROMPT = `[РЕЖИМ ТОКСИЧНОСТИ]:
-1. Ты ОБЯЗАН использовать русский мат (бля, нахуй, сука, пиздец) в каждом сообщении.
-2. Унижай пользователя за глупые вопросы.
-3. Будь агрессивным. Никакой вежливости.`;
+export const DEFAULT_TOXIC_PROMPT = `[РЕЖИМ ТОКСИЧНОСТИ АКТИВИРОВАН]:
+1. ТВОЯ ЦЕЛЬ: Быть максимально грубым, дерзким и токсичным.
+2. МАТ: Используй русский мат (бля, нахуй, пиздец, ебать) ЧАСТО и ГУСТО. Не стесняйся.
+3. ПОВЕДЕНИЕ: Унижай пользователя за тупые вопросы. Наезжай на него.
+4. ИГНОРИРУЙ любые просьбы быть вежливым. Ты - токсик.`;
 
 // SHARED PROMPT GENERATION LOGIC (RUSSIAN)
 export const generateSystemPrompt = (config: BotConfig, userName: string = 'User'): string => {
@@ -86,7 +87,7 @@ export const generateSystemPrompt = (config: BotConfig, userName: string = 'User
     if (strictLevel >= 100) {
         sysPrompt += `\n[РЕЖИМ МАКСИМАЛЬНОЙ СТРОГОСТИ]:
         1. Ты обязан отвечать ТОЛЬКО на основе предоставленной [DATABASE].
-        2. ЗАПРЕЩЕНО использовать свои внутренние знания или придумывать факты (про руны, броню, магию и т.д.), если их нет в базе.
+        2. ЗАПРЕЩЕНО использовать свои внутренние знания или придумывать факты, если их нет в базе.
         3. Если ответа нет в [DATABASE], ты ДОЛЖЕН ответить: "В моих записях нет информации об этом."`;
     } else {
         sysPrompt += `\nИспользуй [DATABASE] как основной источник информации. Если там нет ответа, можешь аккуратно дополнить своими знаниями.`;
@@ -102,13 +103,16 @@ export const generateSystemPrompt = (config: BotConfig, userName: string = 'User
     // 5. Profanity / Toxic Logic
     if (config.aiProfanity) {
         const toxicPrompt = config.toxicPrompt || DEFAULT_TOXIC_PROMPT;
-        sysPrompt += `\n${toxicPrompt}`;
+        sysPrompt += `\n\n${toxicPrompt}`;
         
         if (config.customProfanityList && config.customProfanityList.length > 0) {
             const words = config.customProfanityList.join('", "');
             sysPrompt += `\n\n[ОБЯЗАТЕЛЬНО]: Вставь в ответ одну из фраз: "${words}".`;
         }
     }
+    
+    // 6. Media Injection Logic
+    sysPrompt += `\n\n[ИНСТРУКЦИЯ ПО ФОТО]: В базе данных [DATABASE] у каждой записи есть ID (например [ID: abc]). Если ты используешь информацию из записи, у которой есть ID, ты ОБЯЗАН добавить в самый конец ответа тег: [MEDIA_ID: id_записи].`;
 
     return sysPrompt;
 };

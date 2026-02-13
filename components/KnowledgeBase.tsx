@@ -71,7 +71,17 @@ const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items, categories, setIte
         setEditCatName(null);
     };
 
-    // Render logic remains same, ensuring buttons call handlers above
+    const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                setCurrentItem(prev => ({ ...prev, mediaUrl: reader.result as string }));
+            };
+            reader.readAsDataURL(file);
+        }
+    };
+
     return (
         <div className="flex flex-col lg:flex-row gap-6 h-full">
             <div className="w-full lg:w-1/3 bg-gray-800/30 border border-gray-700 rounded-xl overflow-hidden flex flex-col h-[400px] lg:h-full">
@@ -98,6 +108,7 @@ const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items, categories, setIte
                                         <div key={kb.id} onClick={() => { setCurrentItem(kb); setIsEditing(true); setIsManagingCats(false); }} className="p-3 bg-gray-900/50 rounded hover:bg-gray-800 cursor-pointer group border border-gray-800 hover:border-blue-500/30">
                                             <div className="flex justify-between items-start">
                                                 <div className="font-bold text-sm text-blue-300 mb-1">{kb.title}</div>
+                                                {kb.mediaUrl && <Icons.Video size={14} className="text-gray-500"/>}
                                             </div>
                                             <p className="text-gray-500 text-xs truncate">{kb.response}</p>
                                         </div>
@@ -118,7 +129,7 @@ const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items, categories, setIte
                             if(newCatName && !categories.includes(newCatName)) { 
                                 const newCats = [...categories, newCatName];
                                 setCategories(newCats); 
-                                saveData('categories', newCats); // Explicit Save
+                                saveData('categories', newCats); 
                                 setNewCatName(''); 
                                 if (addLog) addLog('Добавление раздела', `Добавлен раздел "${newCatName}"`, 'success'); 
                             } 
@@ -144,8 +155,8 @@ const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items, categories, setIte
                                             const newItems = items.map(kb => kb.category === cat ? { ...kb, category: 'Разное' } : kb);
                                             setCategories(newCats);
                                             setItems(newItems);
-                                            saveData('categories', newCats); // Explicit Save
-                                            saveData('knowledgeBase', newItems); // Explicit Save
+                                            saveData('categories', newCats); 
+                                            saveData('knowledgeBase', newItems); 
                                             if(addLog) addLog('Удаление раздела', `Удален раздел "${cat}"`, 'warning'); 
                                         }} className="text-gray-400 hover:text-red-400 p-1"><Icons.Trash2 size={16}/></button>
                                     </div>
@@ -175,9 +186,28 @@ const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items, categories, setIte
                         <div>
                             <label className="text-xs text-gray-500">Текст для AI (База знаний)</label>
                             <div className="bg-gray-900/50 p-2 rounded mb-1 border border-gray-700">
-                                <p className="text-[10px] text-gray-400">💡 Совет: Для добавления кастомных эмодзи (премиум стикеров), скопируйте их из Telegram и вставьте прямо сюда в текст.</p>
+                                <p className="text-[10px] text-gray-400">💡 Бот будет использовать этот текст для ответа на вопросы.</p>
                             </div>
-                            <textarea rows={12} value={currentItem.response} onChange={e => setCurrentItem({...currentItem, response: e.target.value})} className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white font-mono text-sm" placeholder="Информация, которую бот должен знать..." />
+                            <textarea rows={8} value={currentItem.response} onChange={e => setCurrentItem({...currentItem, response: e.target.value})} className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white font-mono text-sm" placeholder="Информация, которую бот должен знать..." />
+                        </div>
+
+                        {/* Media Upload */}
+                        <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
+                             <label className="text-xs text-gray-500 uppercase font-bold block mb-2">Фото (Отправится с ответом)</label>
+                             <div className="flex gap-4 items-center">
+                                 <label className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded cursor-pointer border border-gray-600 transition-colors">
+                                     <Icons.Upload size={16}/>
+                                     <span className="text-xs font-bold text-gray-300">Загрузить</span>
+                                     <input type="file" onChange={handleFileUpload} className="hidden"/>
+                                 </label>
+                                 {currentItem.mediaUrl && (
+                                     <div className="relative group w-20 h-20 bg-black rounded border border-gray-600 overflow-hidden">
+                                         <img src={currentItem.mediaUrl} alt="Preview" className="w-full h-full object-cover"/>
+                                         <button onClick={() => setCurrentItem({...currentItem, mediaUrl: ''})} className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 text-red-400"><Icons.Trash2 size={20}/></button>
+                                     </div>
+                                 )}
+                                 {currentItem.mediaUrl && <span className="text-xs text-green-400">Фото загружено. Бот прикрепит его, если ответ будет взят из этой статьи.</span>}
+                             </div>
                         </div>
                         
                         <div className="flex justify-end gap-3 pt-4">

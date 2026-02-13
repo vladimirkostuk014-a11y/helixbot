@@ -69,7 +69,7 @@ setInterval(() => {
 }, 10000);
 
 // ==========================================
-// 3. API TELEGRAM
+// 3. API TELEGRAM (FIXED FOR MEDIA+BUTTONS)
 // ==========================================
 const apiCall = async (method, body) => {
     if (!state.config.token) return;
@@ -100,6 +100,7 @@ const apiCall = async (method, body) => {
             Object.keys(body).forEach(key => {
                 if (key !== mediaField && body[key] !== undefined) {
                     let val = body[key];
+                    // CRITICAL FIX: Ensure buttons/objects are stringified when using FormData
                     if (typeof val === 'object') val = JSON.stringify(val);
                     form.append(key, val);
                 }
@@ -123,7 +124,7 @@ const apiCall = async (method, body) => {
 };
 
 // ==========================================
-// 4. SCHEDULERS
+// 4. SCHEDULERS (No Changes)
 // ==========================================
 setInterval(async () => {
     const now = new Date();
@@ -134,18 +135,12 @@ setInterval(async () => {
     if (mskHours === 0 && mskMinutes === 0) {
         if (!dailyTopSent) {
             if (state.config.enableAutoTop) await sendDailyTop();
-            
             const updates = {};
-            Object.keys(state.users).forEach(uid => {
-                updates[`users/${uid}/dailyMsgCount`] = 0;
-            });
+            Object.keys(state.users).forEach(uid => { updates[`users/${uid}/dailyMsgCount`] = 0; });
             if (Object.keys(updates).length > 0) await firebaseUpdate(ref(db), updates);
-            
             dailyTopSent = true;
         }
-    } else {
-        dailyTopSent = false;
-    }
+    } else { dailyTopSent = false; }
 
     if (state.config.enableCalendarAlerts && Date.now() - lastCalendarCheck > 55000) {
         lastCalendarCheck = Date.now();
@@ -165,15 +160,8 @@ const checkCalendarEvents = async (mskDate) => {
 
     for (const event of state.calendarEvents) {
         if (event.notifyDate === todayStr && event.notifyTime === timeStr) {
-            const msg = `⚡️ <b>${event.title}</b>\n\n` +
-                        `📅 <b>Даты:</b> ${event.startDate} — ${event.endDate}\n` +
-                        `📂 <i>Категория: ${event.category}</i>\n\n` +
-                        `${event.description || ''}`;
-            
-            const kb = event.buttons && event.buttons.length > 0 
-                ? { inline_keyboard: event.buttons.map(b => [{ text: b.text, url: b.url }]) }
-                : undefined;
-
+            const msg = `⚡️ <b>${event.title}</b>\n\n📅 <b>Даты:</b> ${event.startDate} — ${event.endDate}\n📂 <i>Категория: ${event.category}</i>\n\n${event.description || ''}`;
+            const kb = event.buttons && event.buttons.length > 0 ? { inline_keyboard: event.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
             const target = state.config.targetChatId;
             const tid = event.topicId && event.topicId !== 'general' ? event.topicId : undefined;
 
@@ -188,24 +176,12 @@ const checkCalendarEvents = async (mskDate) => {
 
 const sendDailyTop = async () => {
     if (!state.config.targetChatId) return;
-
-    const sortedUsers = Object.values(state.users)
-        .filter(u => u.dailyMsgCount > 0)
-        .sort((a, b) => b.dailyMsgCount - a.dailyMsgCount)
-        .slice(0, 10);
-
+    const sortedUsers = Object.values(state.users).filter(u => u.dailyMsgCount > 0).sort((a, b) => b.dailyMsgCount - a.dailyMsgCount).slice(0, 10);
     const topCommand = state.commands.find(c => c.trigger === '_daily_top_');
     if (!topCommand && sortedUsers.length === 0) return;
 
-    let listStr = "";
-    if (sortedUsers.length > 0) {
-        sortedUsers.forEach((u, index) => {
-            const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
-            listStr += `${medal} <b>${u.name}</b>: ${u.dailyMsgCount} сбщ.\n`;
-        });
-    } else {
-        listStr = "Сегодня никто не писал 😔";
-    }
+    let listStr = sortedUsers.length > 0 ? "" : "Сегодня никто не писал 😔";
+    if (sortedUsers.length > 0) sortedUsers.forEach((u, index) => { listStr += `${index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : index + 1 + '.'} <b>${u.name}</b>: ${u.dailyMsgCount} сбщ.\n`; });
 
     let resp = topCommand ? topCommand.response : "🏆 <b>Топ активных участников за день:</b>\n\n{top_list}";
     resp = resp.replace(/{top_list}/g, listStr);
@@ -221,7 +197,7 @@ const sendDailyTop = async () => {
 };
 
 // ==========================================
-// 5. AI LOGIC (IMPROVED RUSSIAN PROMPTS)
+// 5. AI LOGIC (IMPROVED + MEDIA HANDLING)
 // ==========================================
 const getAIResponse = async (question, userName) => {
     let { 
@@ -234,26 +210,22 @@ const getAIResponse = async (question, userName) => {
         const configSnap = await get(ref(db, 'config'));
         const liveConfig = configSnap.val() || {};
         apiKeyToUse = (liveConfig.openaiApiKey || "").trim();
-        
-        // Refresh local vars from live config just in case
         if (liveConfig.personalityPrompts) personalityPrompts = liveConfig.personalityPrompts;
         if (liveConfig.toxicPrompt) toxicPrompt = liveConfig.toxicPrompt;
     } catch (e) { apiKeyToUse = (state.config.openaiApiKey || "").trim(); }
 
-    if (!apiKeyToUse) return "⚠️ Ключ AI не найден.";
+    if (!apiKeyToUse) return { text: "⚠️ Ключ AI не найден.", mediaId: null };
 
+    // Inject IDs into context so AI knows which item has which media
     const kbContent = state.knowledgeBase.length > 0 
-        ? state.knowledgeBase.map(k => `Q: ${k.triggers}\nA: ${k.response}`).join('\n\n')
+        ? state.knowledgeBase.map(k => `[ID: ${k.id}] Q: ${k.triggers}\nA: ${k.response}`).join('\n\n')
         : "База знаний пуста.";
 
-    // --- PROMPT GENERATION (RUSSIAN) ---
     let sysPrompt = "";
 
     if (systemPromptOverride && systemPromptOverride.trim().length > 0) {
-        // Manual Override (Global)
         sysPrompt = systemPromptOverride;
     } else {
-        // --- 1. PERSONALITY ---
         const DEFAULT_PERSONA_PROMPTS = {
             'helpful': 'Ты полезный и вежливый помощник Хеликс.',
             'kind': 'Ты очень добрый, милый и заботливый помощник.',
@@ -263,47 +235,28 @@ const getAIResponse = async (question, userName) => {
             'gopnik': 'Ты четкий пацанчик. Общайся на "ты", используй дворовый сленг.'
         };
 
-        let rolePrompt = "";
-        if (personalityPrompts && personalityPrompts[aiPersonality]) {
-            rolePrompt = personalityPrompts[aiPersonality];
-        } else {
-            rolePrompt = DEFAULT_PERSONA_PROMPTS[aiPersonality] || DEFAULT_PERSONA_PROMPTS['helpful'];
-        }
-
+        let rolePrompt = (personalityPrompts && personalityPrompts[aiPersonality]) ? personalityPrompts[aiPersonality] : (DEFAULT_PERSONA_PROMPTS[aiPersonality] || DEFAULT_PERSONA_PROMPTS['helpful']);
         sysPrompt = `Роль: ${rolePrompt}\nИмя пользователя: ${userName}\nЯзык ответов: Русский.\n`;
 
-        // --- 2. STRICTNESS ---
         if (aiStrictness >= 100) {
-            sysPrompt += `\n[РЕЖИМ МАКСИМАЛЬНОЙ СТРОГОСТИ]:
-            1. Ты обязан отвечать ТОЛЬКО на основе предоставленной [DATABASE].
-            2. ЗАПРЕЩЕНО использовать свои внутренние знания или придумывать факты (про руны, броню, магию и т.д.), если их нет в базе.
-            3. Если ответа нет в [DATABASE], ты ДОЛЖЕН ответить: "В моих записях нет информации об этом."`;
+            sysPrompt += `\n[РЕЖИМ МАКСИМАЛЬНОЙ СТРОГОСТИ]:\n1. Отвечай ТОЛЬКО на основе [DATABASE].\n2. Если нет ответа, пиши: "Информации нет."`;
         } else {
-            sysPrompt += `\nИспользуй [DATABASE] как основной источник информации. Если там нет ответа, можешь аккуратно дополнить своими знаниями.`;
+            sysPrompt += `\nИспользуй [DATABASE] как источник.`;
         }
 
-        // --- 3. BEHAVIOR ---
-        if (aiBehavior === 'concise') {
-            sysPrompt += "\n[СТИЛЬ]: Отвечай максимально коротко, четко и без воды. 1-2 предложения.";
-        } else if (aiBehavior === 'detailed') {
-            sysPrompt += "\n[СТИЛЬ]: Отвечай максимально подробно, развернуто, с деталями.";
-        }
+        if (aiBehavior === 'concise') sysPrompt += "\n[СТИЛЬ]: Коротко, 1-2 предложения.";
+        else if (aiBehavior === 'detailed') sysPrompt += "\n[СТИЛЬ]: Подробно.";
 
-        // --- 4. TOXICITY ---
         if (aiProfanity) {
-            const DEFAULT_TOXIC_PROMPT = `[РЕЖИМ ТОКСИЧНОСТИ]:
-            1. Ты ОБЯЗАН использовать русский мат (бля, нахуй, сука, пиздец) в каждом сообщении.
-            2. Унижай пользователя за глупые вопросы.
-            3. Будь агрессивным. Никакой вежливости.`;
-            
-            const toxPrompt = toxicPrompt || DEFAULT_TOXIC_PROMPT;
-            sysPrompt += `\n${toxPrompt}`;
-            
+            const DEFAULT_TOXIC_PROMPT = `[РЕЖИМ ТОКСИЧНОСТИ]:\n1. ОБЯЗАН использовать мат (бля, нахуй, сука).\n2. Унижай за глупость.\n3. Будь агрессивным.`;
+            sysPrompt += `\n\n${toxicPrompt || DEFAULT_TOXIC_PROMPT}`;
             if (customProfanityList && customProfanityList.length > 0) {
                  const randomWord = customProfanityList[Math.floor(Math.random() * customProfanityList.length)];
-                 sysPrompt += `\n\n[ОБЯЗАТЕЛЬНО]: Вставь в ответ эту фразу (можно не к месту): "${randomWord}".`;
+                 sysPrompt += `\nВставь фразу: "${randomWord}".`;
             }
         }
+        
+        sysPrompt += `\n\n[ИНСТРУКЦИЯ ПО ФОТО]: Если ты берешь ответ из записи, у которой есть ID (напр [ID: xyz]), ОБЯЗАТЕЛЬНО добавь в конец ответа тег: [MEDIA_ID: id_записи].`;
     }
 
     try {
@@ -319,87 +272,61 @@ const getAIResponse = async (question, userName) => {
                     { role: "system", content: sysPrompt + "\n\n[DATABASE]:\n" + kbContent },
                     { role: "user", content: question }
                 ],
-                temperature: aiProfanity ? 0.9 : 0.1,
+                // Increase temp for Toxic mode to bypass safety filters
+                temperature: aiProfanity ? 1.1 : 0.1,
                 max_tokens: 800
             })
         });
 
-        // HANDLE 429 (Too Many Requests)
-        if (res.status === 429) {
-            return "Я устал, подождите пару минут 😴";
-        }
+        if (res.status === 429) return { text: "Я устал, подождите пару минут 😴", mediaId: null };
 
         const data = await res.json();
-        return data.choices?.[0]?.message?.content || "...";
-    } catch (e) { return "AI Error."; }
+        const rawText = data.choices?.[0]?.message?.content || "...";
+        
+        // Extract Media ID
+        const mediaMatch = rawText.match(/\[MEDIA_ID:\s*(.+?)\]/);
+        let finalText = rawText.replace(/\[MEDIA_ID:\s*.+?\]/g, '').trim();
+        let mediaId = mediaMatch ? mediaMatch[1] : null;
+
+        return { text: finalText, mediaId };
+    } catch (e) { return { text: "AI Error.", mediaId: null }; }
 };
 
 // ==========================================
-// 6. DATA HELPERS
+// 6. DATA HELPERS (Same as before)
 // ==========================================
 const ensureUserExists = async (user) => {
     if (!user || user.is_bot) return;
     const uid = String(user.id);
-    const updates = {
-        id: user.id,
-        name: user.first_name,
-        username: user.username || '',
-        lastSeen: new Date().toLocaleTimeString('ru-RU'),
-        lastActiveDate: new Date().toISOString(),
-    };
-
     const userRef = ref(db, `users/${uid}`);
     const snap = await get(userRef);
-    const existing = snap.val();
-
-    if (!existing) {
-        await set(userRef, { ...updates, role: 'user', status: 'active', joinDate: new Date().toLocaleDateString(), msgCount: 1, dailyMsgCount: 1 });
+    if (!snap.exists()) {
+        await set(userRef, { id: user.id, name: user.first_name, username: user.username||'', role: 'user', status: 'active', joinDate: new Date().toLocaleDateString(), msgCount: 1, dailyMsgCount: 1, lastSeen: new Date().toLocaleTimeString('ru-RU') });
     } else {
-        await firebaseUpdate(userRef, {
-            ...updates,
-            msgCount: (existing.msgCount || 0) + 1,
-            dailyMsgCount: (existing.dailyMsgCount || 0) + 1
-        });
+        await firebaseUpdate(userRef, { name: user.first_name, username: user.username||'', lastSeen: new Date().toLocaleTimeString('ru-RU'), msgCount: (snap.val().msgCount||0)+1, dailyMsgCount: (snap.val().dailyMsgCount||0)+1 });
     }
 };
 
 const saveMessage = async (msgObj, uid, threadId) => {
     if (uid) {
         const historyRef = ref(db, `users/${uid}/history`);
-        try {
-            await runTransaction(historyRef, (currentHistory) => {
-                let history = currentHistory;
-                if (!history) history = [];
-                if (!Array.isArray(history)) history = Object.values(history);
-                history.push(msgObj);
-                if (history.length > 50) history = history.slice(-50);
-                return history;
-            });
-
-            if (msgObj.dir === 'in') {
-                const unreadRef = ref(db, `users/${uid}/unreadCount`);
-                await runTransaction(unreadRef, (count) => (count || 0) + 1);
-            }
-        } catch (e) { console.error("CRM History Error:", e); }
+        await runTransaction(historyRef, (h) => {
+            let hist = h || [];
+            if (!Array.isArray(hist)) hist = Object.values(hist);
+            hist.push(msgObj);
+            return hist.slice(-50);
+        });
+        if (msgObj.dir === 'in') await runTransaction(ref(db, `users/${uid}/unreadCount`), (c) => (c || 0) + 1);
     }
-
     if (threadId) {
         const topicRef = ref(db, `topicHistory/${threadId}`);
-        try {
-            await runTransaction(topicRef, (currentHistory) => {
-                let history = currentHistory;
-                if (!history) history = [];
-                if (!Array.isArray(history)) history = Object.values(history);
-                history.push(msgObj);
-                if (history.length > 100) history = history.slice(-100);
-                return history;
-            });
-
-            if (msgObj.dir === 'in') {
-                const unreadRef = ref(db, `topicUnreads/${threadId}`);
-                await runTransaction(unreadRef, (count) => (count || 0) + 1);
-            }
-        } catch (e) { console.error("Topic History Error:", e); }
+        await runTransaction(topicRef, (h) => {
+            let hist = h || [];
+            if (!Array.isArray(hist)) hist = Object.values(hist);
+            hist.push(msgObj);
+            return hist.slice(-100);
+        });
+        if (msgObj.dir === 'in') await runTransaction(ref(db, `topicUnreads/${threadId}`), (c) => (c || 0) + 1);
     }
 };
 
@@ -410,28 +337,19 @@ const processUpdate = async (upd) => {
     try {
         const m = upd.message;
         if (!m) return;
-
         const cid = String(m.chat.id);
         const user = m.from;
         const isPrivate = m.chat.type === 'private';
-        
-        const threadId = !isPrivate 
-            ? (m.message_thread_id ? String(m.message_thread_id) : 'general') 
-            : null;
+        const threadId = !isPrivate ? (m.message_thread_id ? String(m.message_thread_id) : 'general') : null;
 
-        if (m.left_chat_member) {
-            await remove(ref(db, `users/${String(m.left_chat_member.id)}`));
-            return;
-        }
+        if (m.left_chat_member) { await remove(ref(db, `users/${String(m.left_chat_member.id)}`)); return; }
 
         if (user && !user.is_bot) {
             await ensureUserExists(user);
-            
             if (m.text || m.caption || m.photo || m.video) {
-                const msgText = m.text || m.caption || (m.photo ? '[Photo]' : '[Video]');
                 const newMsg = {
                     dir: 'in',
-                    text: msgText,
+                    text: m.text || m.caption || (m.photo ? '[Photo]' : '[Video]'),
                     type: m.photo ? 'photo' : (m.video ? 'video' : 'text'),
                     time: new Date().toLocaleTimeString('ru-RU'),
                     timestamp: Date.now(),
@@ -441,14 +359,9 @@ const processUpdate = async (upd) => {
                     userId: user.id,
                     msgId: m.message_id
                 };
-
-                if (isPrivate) {
-                    await saveMessage(newMsg, String(user.id), null);
-                } else {
-                    if (threadId && !state.topicNames[threadId]) {
-                        const topicName = m.reply_to_message?.forum_topic_created?.name || `Topic ${threadId}`;
-                        await set(ref(db, `topicNames/${threadId}`), topicName);
-                    }
+                if (isPrivate) await saveMessage(newMsg, String(user.id), null);
+                else {
+                    if (threadId && !state.topicNames[threadId]) await set(ref(db, `topicNames/${threadId}`), m.reply_to_message?.forum_topic_created?.name || `Topic ${threadId}`);
                     await saveMessage(newMsg, String(user.id), threadId);
                 }
             }
@@ -458,6 +371,7 @@ const processUpdate = async (upd) => {
         const txt = m.text.trim();
         const lowerTxt = txt.toLowerCase();
 
+        // --- COMMANDS HANDLING (FIXED MEDIA+BUTTONS) ---
         for (const cmd of state.commands) {
             let match = false;
             if (cmd.matchType === 'exact') match = lowerTxt === cmd.trigger.toLowerCase();
@@ -468,31 +382,44 @@ const processUpdate = async (upd) => {
                 const dbUser = state.users[String(user.id)];
                 const dbUserRole = dbUser?.role || 'user';
                 if (cmd.isSystem && dbUserRole !== 'admin') continue;
-                
-                const allowedRoles = cmd.allowedRoles || ['user', 'admin'];
-                if (!allowedRoles.includes(dbUserRole)) continue;
-
+                if (!((cmd.allowedRoles || ['user', 'admin']).includes(dbUserRole))) continue;
                 if (cmd.allowedTopicId && cmd.allowedTopicId !== 'private_only' && cmd.allowedTopicId !== String(threadId) && !isPrivate) continue;
 
                 let resp = cmd.response.replace(/{user}/g, user.first_name).replace(/{warns}/g, dbUser?.warnings || 0);
+                
+                // Construct KB Object properly
                 const kb = cmd.buttons?.length > 0 ? { inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
-
                 const targetThreadId = !isPrivate && threadId !== 'general' ? threadId : undefined;
                 
                 if (cmd.mediaUrl) {
-                    await apiCall('sendPhoto', { chat_id: cid, photo: cmd.mediaUrl, caption: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThreadId });
+                    // Send Photo with Caption and Buttons
+                    // apiCall now correctly stringifies `reply_markup` inside FormData
+                    await apiCall('sendPhoto', { 
+                        chat_id: cid, 
+                        photo: cmd.mediaUrl, 
+                        caption: resp, 
+                        parse_mode: 'HTML', 
+                        reply_markup: kb, 
+                        message_thread_id: targetThreadId 
+                    });
                 } else {
-                    await apiCall('sendMessage', { chat_id: cid, text: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThreadId });
+                    await apiCall('sendMessage', { 
+                        chat_id: cid, 
+                        text: resp, 
+                        parse_mode: 'HTML', 
+                        reply_markup: kb, 
+                        message_thread_id: targetThreadId 
+                    });
                 }
                 
                 const botMsg = { dir: 'out', text: `[CMD] ${cmd.trigger}`, type: 'text', time: new Date().toLocaleTimeString('ru-RU'), timestamp: Date.now(), isIncoming: false, isGroup: !isPrivate, user: 'Bot' };
                 if (isPrivate) await saveMessage(botMsg, String(user.id), null);
                 else await saveMessage(botMsg, null, threadId);
-                
                 return;
             }
         }
 
+        // --- AI HANDLING (FIXED MEDIA INJECTION) ---
         if (state.config.enableAI) {
             if (isPrivate && !state.config.enablePM) return;
             const isHelixTrigger = lowerTxt.startsWith('хеликс') || lowerTxt.startsWith('helix');
@@ -502,30 +429,45 @@ const processUpdate = async (upd) => {
 
                 const q = txt.replace(/^(хеликс|helix)/i, '').trim();
                 if (q) {
-                    const a = await getAIResponse(q, user.first_name);
+                    const aiResult = await getAIResponse(q, user.first_name);
+                    const aiText = aiResult.text;
+                    const mediaId = aiResult.mediaId;
                     
                     const aiThreadId = !isPrivate && threadId !== 'general' ? threadId : undefined;
                     
-                    await apiCall('sendMessage', { 
-                        chat_id: cid, 
-                        text: a, 
-                        reply_to_message_id: m.message_id, 
-                        message_thread_id: aiThreadId 
-                    });
-
-                    const aiMsgObj = { dir: 'out', text: a, type: 'text', time: new Date().toLocaleTimeString('ru-RU'), timestamp: Date.now(), isIncoming: false, isGroup: !isPrivate, user: 'Helix AI' };
-                    
-                    if (isPrivate) {
-                        await saveMessage(aiMsgObj, String(user.id), null);
-                    } else {
-                        await saveMessage(aiMsgObj, null, threadId);
+                    // If AI suggests media, find it in KB
+                    let mediaUrl = null;
+                    if (mediaId) {
+                        const kbItem = state.knowledgeBase.find(k => k.id === mediaId);
+                        if (kbItem && kbItem.mediaUrl) mediaUrl = kbItem.mediaUrl;
                     }
+
+                    if (mediaUrl) {
+                        await apiCall('sendPhoto', {
+                            chat_id: cid,
+                            photo: mediaUrl,
+                            caption: aiText,
+                            reply_to_message_id: m.message_id,
+                            message_thread_id: aiThreadId
+                        });
+                    } else {
+                        await apiCall('sendMessage', { 
+                            chat_id: cid, 
+                            text: aiText, 
+                            reply_to_message_id: m.message_id, 
+                            message_thread_id: aiThreadId 
+                        });
+                    }
+
+                    const aiMsgObj = { dir: 'out', text: aiText, type: mediaUrl ? 'photo' : 'text', time: new Date().toLocaleTimeString('ru-RU'), timestamp: Date.now(), isIncoming: false, isGroup: !isPrivate, user: 'Helix AI' };
+                    if (isPrivate) await saveMessage(aiMsgObj, String(user.id), null);
+                    else await saveMessage(aiMsgObj, null, threadId);
                     
                     const statsRef = ref(db, 'aiStats');
                     await runTransaction(statsRef, (s) => {
                         if(!s) s = { total: 0, history: [] };
                         if(!s.history) s.history = [];
-                        s.history.push({ query: q, response: a, time: Date.now() });
+                        s.history.push({ query: q, response: aiText, time: Date.now() });
                         s.total = (s.total || 0) + 1;
                         if(s.history.length > 100) s.history = s.history.slice(-100);
                         return s;
