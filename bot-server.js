@@ -303,7 +303,6 @@ const ensureUserExists = async (user) => {
         lastActiveDate: new Date().toISOString(),
     };
 
-    // FETCH FRESH DATA FROM DB (Do not rely on state.users to avoid stale overwrite)
     const userRef = ref(db, `users/${uid}`);
     const snap = await get(userRef);
     const existing = snap.val();
@@ -320,6 +319,7 @@ const ensureUserExists = async (user) => {
 };
 
 const saveMessage = async (msgObj, uid, threadId) => {
+    // 1. SAVE TO USER HISTORY (CRM) - If uid is provided (Private or Group msg from a user)
     if (uid) {
         const historyRef = ref(db, `users/${uid}/history`);
         try {
@@ -339,6 +339,7 @@ const saveMessage = async (msgObj, uid, threadId) => {
         } catch (e) { console.error("CRM History Error:", e); }
     }
 
+    // 2. SAVE TO TOPIC HISTORY (Live Chat) - ONLY if threadId is provided (Group Topics)
     if (threadId) {
         const topicRef = ref(db, `topicHistory/${threadId}`);
         try {
@@ -370,15 +371,24 @@ const processUpdate = async (upd) => {
         const cid = String(m.chat.id);
         const user = m.from;
         const isPrivate = m.chat.type === 'private';
-        const threadId = m.message_thread_id ? String(m.message_thread_id) : (isPrivate ? String(user.id) : 'general');
+        
+        // Determine Topic ID (Thread ID)
+        // If it's a topic message, use message_thread_id. 
+        // If it's a general group message (no thread_id), treat as 'general'.
+        // If it's private, threadId is NULL (we don't want it in Live Chat topics).
+        const threadId = !isPrivate 
+            ? (m.message_thread_id ? String(m.message_thread_id) : 'general') 
+            : null;
 
         if (m.left_chat_member) {
             await remove(ref(db, `users/${String(m.left_chat_member.id)}`));
             return;
         }
 
+        // --- 1. HANDLE INCOMING MESSAGE STORAGE ---
         if (user && !user.is_bot) {
             await ensureUserExists(user);
+            
             if (m.text || m.caption || m.photo || m.video) {
                 const msgText = m.text || m.caption || (m.photo ? '[Photo]' : '[Video]');
                 const newMsg = {
@@ -394,11 +404,21 @@ const processUpdate = async (upd) => {
                     msgId: m.message_id
                 };
 
-                if (!state.topicNames[threadId]) {
-                    const topicName = isPrivate ? `${user.first_name} (ЛС)` : (m.reply_to_message?.forum_topic_created?.name || `Topic ${threadId}`);
-                    await set(ref(db, `topicNames/${threadId}`), topicName);
+                // CRITICAL SEPARATION:
+                if (isPrivate) {
+                    // Private Message -> Save ONLY to User CRM History
+                    await saveMessage(newMsg, String(user.id), null);
+                } else {
+                    // Group/Topic Message -> Save to Topic History AND User History
+                    
+                    // Register Topic Name if new
+                    if (threadId && !state.topicNames[threadId]) {
+                        const topicName = m.reply_to_message?.forum_topic_created?.name || `Topic ${threadId}`;
+                        await set(ref(db, `topicNames/${threadId}`), topicName);
+                    }
+                    
+                    await saveMessage(newMsg, String(user.id), threadId);
                 }
-                await saveMessage(newMsg, String(user.id), threadId);
             }
         }
 
@@ -406,7 +426,7 @@ const processUpdate = async (upd) => {
         const txt = m.text.trim();
         const lowerTxt = txt.toLowerCase();
 
-        // 1. Commands
+        // --- 2. COMMANDS LOGIC ---
         for (const cmd of state.commands) {
             let match = false;
             if (cmd.matchType === 'exact') match = lowerTxt === cmd.trigger.toLowerCase();
@@ -426,33 +446,60 @@ const processUpdate = async (upd) => {
                 let resp = cmd.response.replace(/{user}/g, user.first_name).replace(/{warns}/g, dbUser?.warnings || 0);
                 const kb = cmd.buttons?.length > 0 ? { inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
 
+                // Send Response
+                const targetThreadId = !isPrivate && threadId !== 'general' ? threadId : undefined;
+                
                 if (cmd.mediaUrl) {
-                    await apiCall('sendPhoto', { chat_id: cid, photo: cmd.mediaUrl, caption: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: !isPrivate && threadId !== 'general' ? threadId : undefined });
+                    await apiCall('sendPhoto', { chat_id: cid, photo: cmd.mediaUrl, caption: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThreadId });
                 } else {
-                    await apiCall('sendMessage', { chat_id: cid, text: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: !isPrivate && threadId !== 'general' ? threadId : undefined });
+                    await apiCall('sendMessage', { chat_id: cid, text: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThreadId });
                 }
                 
-                await saveMessage({ dir: 'out', text: `[CMD] ${cmd.trigger}`, type: 'text', time: new Date().toLocaleTimeString('ru-RU'), timestamp: Date.now(), isIncoming: false, isGroup: !isPrivate, user: 'Bot' }, String(user.id), threadId);
+                // Save Bot Reply to History
+                const botMsg = { dir: 'out', text: `[CMD] ${cmd.trigger}`, type: 'text', time: new Date().toLocaleTimeString('ru-RU'), timestamp: Date.now(), isIncoming: false, isGroup: !isPrivate, user: 'Bot' };
+                if (isPrivate) await saveMessage(botMsg, String(user.id), null);
+                else await saveMessage(botMsg, null, threadId);
+                
                 return;
             }
         }
 
-        // 2. AI
+        // --- 3. AI LOGIC ---
         if (state.config.enableAI) {
+            // Check Private Message restriction
             if (isPrivate && !state.config.enablePM) return;
+            
             const isHelixTrigger = lowerTxt.startsWith('хеликс') || lowerTxt.startsWith('helix');
             
             if (isHelixTrigger) {
-                // FIXED TOPIC CHECK
-                if (state.disabledAiTopics && state.disabledAiTopics.includes(String(threadId))) return;
+                // Check if AI is disabled for this specific topic (Group only)
+                if (!isPrivate && threadId && state.disabledAiTopics && state.disabledAiTopics.includes(String(threadId))) return;
 
                 const q = txt.replace(/^(хеликс|helix)/i, '').trim();
                 if (q) {
                     const a = await getAIResponse(q, user.first_name);
-                    await apiCall('sendMessage', { chat_id: cid, text: a, reply_to_message_id: m.message_id, message_thread_id: !isPrivate && threadId !== 'general' ? threadId : undefined });
-
-                    await saveMessage({ dir: 'out', text: a, type: 'text', time: new Date().toLocaleTimeString('ru-RU'), timestamp: Date.now(), isIncoming: false, isGroup: !isPrivate, user: 'Helix AI' }, String(user.id), threadId);
                     
+                    // Send AI Response
+                    // IMPORTANT: Pass message_thread_id to reply IN the topic
+                    const aiThreadId = !isPrivate && threadId !== 'general' ? threadId : undefined;
+                    
+                    await apiCall('sendMessage', { 
+                        chat_id: cid, 
+                        text: a, 
+                        reply_to_message_id: m.message_id, 
+                        message_thread_id: aiThreadId 
+                    });
+
+                    // Save AI Reply
+                    const aiMsgObj = { dir: 'out', text: a, type: 'text', time: new Date().toLocaleTimeString('ru-RU'), timestamp: Date.now(), isIncoming: false, isGroup: !isPrivate, user: 'Helix AI' };
+                    
+                    if (isPrivate) {
+                        await saveMessage(aiMsgObj, String(user.id), null);
+                    } else {
+                        await saveMessage(aiMsgObj, null, threadId);
+                    }
+                    
+                    // Stats
                     const statsRef = ref(db, 'aiStats');
                     await runTransaction(statsRef, (s) => {
                         if(!s) s = { total: 0, history: [] };
