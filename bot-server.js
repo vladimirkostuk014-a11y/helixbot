@@ -221,7 +221,7 @@ const sendDailyTop = async () => {
 };
 
 // ==========================================
-// 5. AI LOGIC (IMPROVED PROFANITY & STRICTNESS)
+// 5. AI LOGIC (IMPROVED RUSSIAN PROMPTS)
 // ==========================================
 const getAIResponse = async (question, userName) => {
     let { aiBaseUrl, aiModel, aiPersonality, aiProfanity, customProfanityList, aiStrictness, aiBehavior, systemPromptOverride } = state.config;
@@ -238,52 +238,54 @@ const getAIResponse = async (question, userName) => {
         ? state.knowledgeBase.map(k => `Q: ${k.triggers}\nA: ${k.response}`).join('\n\n')
         : "База знаний пуста.";
 
-    // --- PROMPT GENERATION ---
+    // --- PROMPT GENERATION (RUSSIAN) ---
     let sysPrompt = "";
 
     if (systemPromptOverride && systemPromptOverride.trim().length > 0) {
-        // 1. Manual Override Active
+        // Manual Override
         sysPrompt = systemPromptOverride;
     } else {
-        // 2. Auto Generation
+        // Auto Generation in Russian
         const personaMap = {
-            'helpful': 'Ты полезный помощник Хеликс.',
-            'kind': 'Ты добрый и милый помощник.',
-            'official': 'Ты строгий официальный бот.',
-            'joker': 'Ты стендап-комик. Постоянно шути.',
-            'angry': 'Ты злой бот. Ты ненавидишь людей.',
-            'gopnik': 'Ты гопник. Общайся на "ты", используй сленг.'
+            'helpful': 'Ты полезный и вежливый помощник Хеликс.',
+            'kind': 'Ты очень добрый, милый и заботливый помощник.',
+            'official': 'Ты строгий официальный бот. Отвечай сухо и формально.',
+            'joker': 'Ты стендап-комик. Постоянно шути, используй сарказм.',
+            'angry': 'Ты злой бот. Ты ненавидишь глупые вопросы и людей.',
+            'gopnik': 'Ты четкий пацанчик. Общайся на "ты", используй дворовый сленг.'
         };
 
-        sysPrompt = `Role: ${personaMap[aiPersonality] || personaMap['helpful']}\nUser: ${userName}\nLanguage: Russian.\n`;
+        sysPrompt = `Роль: ${personaMap[aiPersonality] || personaMap['helpful']}\nИмя пользователя: ${userName}\nЯзык ответов: Русский.\n`;
 
-        // Strictness Logic (100% = Database Only)
+        // Strictness / Accuracy Logic (100% = Database Only)
         if (aiStrictness >= 100) {
-            sysPrompt += `\n[CRITICAL]: STRICT DATABASE MODE.
-            1. You must answer ONLY using the provided [DATABASE].
-            2. If the answer is not in the [DATABASE], explicitly state: "В моих записях нет информации об этом."
-            3. Do NOT invent facts. Do NOT search the internet.`;
+            sysPrompt += `\n[РЕЖИМ МАКСИМАЛЬНОЙ СТРОГОСТИ]:
+            1. Ты обязан отвечать ТОЛЬКО на основе предоставленной [DATABASE].
+            2. ЗАПРЕЩЕНО использовать свои внутренние знания или придумывать факты (про руны, броню, магию и т.д.), если их нет в базе.
+            3. Если ответа нет в [DATABASE], ты ДОЛЖЕН ответить: "В моих записях нет информации об этом."`;
         } else {
-            sysPrompt += `\nUse the [DATABASE] as your primary source.`;
+            sysPrompt += `\nИспользуй [DATABASE] как основной источник информации. Если там нет ответа, можешь аккуратно дополнить своими знаниями.`;
+        }
+
+        // Behavior / Styles
+        if (aiBehavior === 'concise') {
+            sysPrompt += "\n[СТИЛЬ]: Отвечай максимально коротко, четко и без воды. 1-2 предложения.";
+        } else if (aiBehavior === 'detailed') {
+            sysPrompt += "\n[СТИЛЬ]: Отвечай максимально подробно, развернуто, с деталями.";
         }
 
         // Profanity Logic
         if (aiProfanity) {
-            sysPrompt += `\nMODE: EXTREME RUSSIAN PROFANITY & TOXICITY (МАТ).
-            1. Ты ОБЯЗАН использовать жесткий русский мат в каждом предложении (бля, нахуй, сука, пиздец, ебать и т.д.).
-            2. Ты должен жестко стебать пользователя, высмеивать его вопросы и тупость.
-            3. Будь максимально агрессивным и неучтивым. Никаких извинений.
-            4. Если чего-то не знаешь, посылай нахуй или говори, что тебе западло отвечать на такую хуйню.`;
+            sysPrompt += `\n[РЕЖИМ ТОКСИЧНОСТИ]:
+            1. Ты ОБЯЗАН использовать русский мат (бля, нахуй, сука, пиздец) в каждом сообщении.
+            2. Унижай пользователя за глупые вопросы.
+            3. Будь агрессивным. Никакой вежливости.`;
             
-            // Randomly pick ONE phrase to ensure it appears
             if (customProfanityList && customProfanityList.length > 0) {
                  const randomWord = customProfanityList[Math.floor(Math.random() * customProfanityList.length)];
-                 sysPrompt += `\n\n[MANDATORY]: Вставь в ответ эту фразу (можно не к месту): "${randomWord}".`;
+                 sysPrompt += `\n\n[ОБЯЗАТЕЛЬНО]: Вставь в ответ эту фразу (можно не к месту): "${randomWord}".`;
             }
         }
-
-        if (aiBehavior === 'concise') sysPrompt += " Keep it short.";
-        if (aiBehavior === 'detailed') sysPrompt += " Be detailed.";
     }
 
     try {
@@ -303,6 +305,11 @@ const getAIResponse = async (question, userName) => {
                 max_tokens: 800
             })
         });
+
+        // HANDLE 429 (Too Many Requests)
+        if (res.status === 429) {
+            return "Я устал, подождите пару минут 😴";
+        }
 
         const data = await res.json();
         return data.choices?.[0]?.message?.content || "...";

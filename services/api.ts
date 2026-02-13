@@ -49,7 +49,7 @@ const performAiRequest = async (apiKey: string, config: BotConfig, messages: any
     });
 };
 
-// SHARED PROMPT GENERATION LOGIC (Used by Dashboard Preview and Test AI)
+// SHARED PROMPT GENERATION LOGIC (RUSSIAN)
 export const generateSystemPrompt = (config: BotConfig, userName: string = 'User'): string => {
     // 1. Manual Override
     if (config.systemPromptOverride && config.systemPromptOverride.trim().length > 0) {
@@ -60,45 +60,45 @@ export const generateSystemPrompt = (config: BotConfig, userName: string = 'User
     const strictLevel = config.aiStrictness || 80;
     
     const personaMap: Record<string, string> = {
-        'helpful': 'Ты полезный помощник Хеликс.',
-        'kind': 'Ты очень добрый помощник.',
-        'official': 'Ты строгий официальный бот.',
-        'joker': 'Ты стендап-комик. Постоянно шути.',
-        'angry': 'Ты злой бот. Ненавидишь людей.',
-        'gopnik': 'Ты гопник. Сленг, дерзость.'
+        'helpful': 'Ты полезный и вежливый помощник Хеликс.',
+        'kind': 'Ты очень добрый, милый и заботливый помощник.',
+        'official': 'Ты строгий официальный бот. Отвечай сухо и формально.',
+        'joker': 'Ты стендап-комик. Постоянно шути, используй сарказм.',
+        'angry': 'Ты злой бот. Ты ненавидишь глупые вопросы и людей.',
+        'gopnik': 'Ты четкий пацанчик. Общайся на "ты", используй дворовый сленг.'
     };
 
-    let sysPrompt = `Role: ${personaMap[config.aiPersonality] || personaMap['helpful']}\nLanguage: Russian.\n`;
+    let sysPrompt = `Роль: ${personaMap[config.aiPersonality] || personaMap['helpful']}\nИмя пользователя: ${userName}\nЯзык ответов: Русский.\n`;
 
     // Strictness / Accuracy Logic
     if (strictLevel >= 100) {
-        sysPrompt += `\n[CRITICAL]: STRICT DATABASE MODE.
-        1. You must answer ONLY using the provided [DATABASE].
-        2. If the answer is not in the [DATABASE], explicitly state: "В моих записях нет информации об этом."
-        3. Do NOT invent facts. Do NOT search the internet.`;
+        sysPrompt += `\n[РЕЖИМ МАКСИМАЛЬНОЙ СТРОГОСТИ]:
+        1. Ты обязан отвечать ТОЛЬКО на основе предоставленной [DATABASE].
+        2. ЗАПРЕЩЕНО использовать свои внутренние знания или придумывать факты (про руны, броню, магию и т.д.), если их нет в базе.
+        3. Если ответа нет в [DATABASE], ты ДОЛЖЕН ответить: "В моих записях нет информации об этом."`;
     } else {
-        sysPrompt += `\nUse the [DATABASE] as your primary source.`;
+        sysPrompt += `\nИспользуй [DATABASE] как основной источник информации. Если там нет ответа, можешь аккуратно дополнить своими знаниями.`;
+    }
+
+    // Styles (Behavior)
+    if (config.aiBehavior === 'concise') {
+        sysPrompt += "\n[СТИЛЬ]: Отвечай максимально коротко, четко и без воды. 1-2 предложения.";
+    } else if (config.aiBehavior === 'detailed') {
+        sysPrompt += "\n[СТИЛЬ]: Отвечай максимально подробно, развернуто, с деталями.";
     }
 
     // Profanity / Toxic Logic
     if (config.aiProfanity) {
-        sysPrompt += `\nMODE: EXTREME RUSSIAN PROFANITY & TOXICITY (МАТ).
-        1. Ты ОБЯЗАН использовать жесткий русский мат в каждом ответе (бля, нахуй, сука, пиздец, ебать).
-        2. Ты должен жестко стебать пользователя, унижать его за тупые вопросы и быть максимально токсичным.
-        3. Никакой вежливости. Никаких извинений. 
-        4. Веди себя как самый агрессивный обитатель рунета.`;
+        sysPrompt += `\n[РЕЖИМ ТОКСИЧНОСТИ]:
+        1. Ты ОБЯЗАН использовать русский мат (бля, нахуй, сука, пиздец) в каждом сообщении.
+        2. Унижай пользователя за глупые вопросы.
+        3. Будь агрессивным. Никакой вежливости.`;
         
         if (config.customProfanityList && config.customProfanityList.length > 0) {
-            // In the real bot, we pick one randomly. For the prompt context, we list instructions to do so.
-            // But for the static prompt string, we can't be random every time displayed.
-            // We'll add a generic instruction to use these words.
             const words = config.customProfanityList.join('", "');
-            sysPrompt += `\n\n[MANDATORY]: You MUST include at least one of these phrases naturally in your response: "${words}".`;
+            sysPrompt += `\n\n[ОБЯЗАТЕЛЬНО]: Вставь в ответ одну из фраз: "${words}".`;
         }
     }
-
-    if (config.aiBehavior === 'concise') sysPrompt += "\nKeep responses short and concise.";
-    if (config.aiBehavior === 'detailed') sysPrompt += "\nProvide detailed responses.";
 
     return sysPrompt;
 };
@@ -110,8 +110,6 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
     activeKey = activeKey.trim();
     
     // Generate the prompt using the shared logic
-    // Note: For random words in the playground, we simulate the randomness here slightly if needed, 
-    // or just let the prompt instruction handle it.
     let sysPrompt = generateSystemPrompt(config, 'Admin');
 
     const messages = [
@@ -121,6 +119,12 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
 
     try {
         let response = await performAiRequest(activeKey, config, messages);
+        
+        // Handle 429 explicitly
+        if (response.status === 429) {
+            return "Я устал, подождите пару минут 😴";
+        }
+
         const data = await response.json();
         if (!response.ok) return `AI Error: ${data.error?.message}`;
         return data.choices?.[0]?.message?.content || "Пустой ответ.";
