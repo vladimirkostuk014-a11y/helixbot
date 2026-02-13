@@ -37,7 +37,7 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
             // If user removed from DB, deselect.
             if (!users[String(selectedUserId)]) setSelectedUserId(null); 
         }
-        if (selectedUser && selectedUser.unreadCount) {
+        if (selectedUser && selectedUser.unreadCount && selectedUser.unreadCount > 0) {
              setUsers(prev => ({ ...prev, [selectedUser.id]: { ...prev[selectedUser.id], unreadCount: 0 } }));
              saveData(`users/${selectedUser.id}/unreadCount`, 0);
         }
@@ -301,7 +301,8 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
     };
     
     // Filter history to only show private messages (isGroup: false)
-    const visibleHistory = (selectedUser?.history || []).filter(msg => msg.isGroup === false);
+    // FIX: Using !isGroup to include undefined (legacy messages) or strictly false
+    const visibleHistory = (selectedUser?.history || []).filter(msg => !msg.isGroup);
 
     return (
         <div className="flex h-full bg-[#0c0c0e] rounded-2xl overflow-hidden border border-gray-800 shadow-2xl">

@@ -1,6 +1,5 @@
-
 // services/firebase.ts
-import { initializeApp } from "firebase/app";
+import * as firebaseApp from "firebase/app";
 import { getDatabase, ref, set, onValue, remove, update } from "firebase/database";
 
 // ==========================================
@@ -17,7 +16,7 @@ const firebaseConfig = {
 };
 
 // Инициализация
-const app = initializeApp(firebaseConfig);
+const app = firebaseApp.initializeApp(firebaseConfig);
 export const db = getDatabase(app);
 
 console.log("🔥 Connected to Firebase Realtime Database: helixbotdb");

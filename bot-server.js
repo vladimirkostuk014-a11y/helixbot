@@ -1,6 +1,6 @@
 
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, onValue, set, update as firebaseUpdate, get, remove } from "firebase/database";
+import { getDatabase, ref, onValue, set, update as firebaseUpdate, get, remove, runTransaction } from "firebase/database";
 import fetch from 'node-fetch';
 import { FormData } from 'formdata-node';
 import { Blob } from 'buffer'; 
@@ -127,12 +127,10 @@ const apiCall = async (method, body) => {
 // ==========================================
 setInterval(async () => {
     const now = new Date();
-    // Create MSK Date Object
     const mskTime = new Date(now.toLocaleString("en-US", {timeZone: "Europe/Moscow"}));
     const mskHours = mskTime.getHours();
     const mskMinutes = mskTime.getMinutes();
     
-    // Daily Reset & Top (at 00:00 MSK)
     if (mskHours === 0 && mskMinutes === 0) {
         if (!dailyTopSent) {
             if (state.config.enableAutoTop) await sendDailyTop();
@@ -149,7 +147,6 @@ setInterval(async () => {
         dailyTopSent = false;
     }
 
-    // Calendar Notifications
     if (state.config.enableCalendarAlerts && Date.now() - lastCalendarCheck > 55000) {
         lastCalendarCheck = Date.now();
         await checkCalendarEvents(mskTime);
@@ -157,7 +154,6 @@ setInterval(async () => {
 }, 30000); 
 
 const checkCalendarEvents = async (mskDate) => {
-    // Manually construct YYYY-MM-DD and HH:MM from the MSK date object
     const y = mskDate.getFullYear();
     const m = String(mskDate.getMonth() + 1).padStart(2, '0');
     const d = String(mskDate.getDate()).padStart(2, '0');
@@ -225,7 +221,7 @@ const sendDailyTop = async () => {
 };
 
 // ==========================================
-// 5. AI LOGIC
+// 5. AI LOGIC (IMPROVED PROFANITY)
 // ==========================================
 const getAIResponse = async (question, userName) => {
     let { aiBaseUrl, aiModel, aiPersonality, aiProfanity, customProfanityList, aiStrictness, aiBehavior } = state.config;
@@ -238,48 +234,36 @@ const getAIResponse = async (question, userName) => {
 
     if (!apiKeyToUse) return "⚠️ Ключ AI не найден.";
 
-    const strictLevel = aiStrictness || 80;
-
     const kbContent = state.knowledgeBase.length > 0 
         ? state.knowledgeBase.map(k => `Q: ${k.triggers}\nA: ${k.response}`).join('\n\n')
         : "База знаний пуста.";
 
     const personaMap = {
         'helpful': 'Ты полезный помощник Хеликс.',
-        'kind': 'Ты очень добрый и милый помощник.',
-        'official': 'Ты строгий официальный бот-администратор.',
+        'kind': 'Ты добрый и милый помощник.',
+        'official': 'Ты строгий официальный бот.',
         'joker': 'Ты стендап-комик. Постоянно шути.',
-        'angry': 'Ты злой бот. Отвечай с раздражением.',
-        'gopnik': 'Ты гопник с района. Общайся на "ты", используй сленг.'
+        'angry': 'Ты злой бот. Ты ненавидишь людей.',
+        'gopnik': 'Ты гопник. Общайся на "ты", используй сленг.'
     };
 
-    let sysPrompt = `Role: ${personaMap[aiPersonality] || personaMap['helpful']}\nUser Name: ${userName}\nLanguage: Russian.\n`;
+    let sysPrompt = `Role: ${personaMap[aiPersonality] || personaMap['helpful']}\nUser: ${userName}\nLanguage: Russian.\n`;
 
     if (aiProfanity) {
-        sysPrompt += `\nMODE: EXTREME PROFANITY (TOXIC).`;
+        sysPrompt += `\nMODE: EXTREME RUSSIAN PROFANITY & TOXICITY (МАТ).
+        1. Ты ОБЯЗАН использовать жесткий русский мат в каждом предложении (бля, нахуй, сука, пиздец, ебать и т.д.).
+        2. Ты должен жестко стебать пользователя, высмеивать его вопросы и тупость.
+        3. Будь максимально агрессивным и неучтивым. Никаких извинений.
+        4. Если чего-то не знаешь, посылай нахуй или говори, что тебе западло отвечать на такую хуйню.`;
+        
         if (customProfanityList && customProfanityList.length > 0) {
              const randomWord = customProfanityList[Math.floor(Math.random() * customProfanityList.length)];
-             sysPrompt += `\nTry to use this phrase: "${randomWord}".`;
+             sysPrompt += `\nОбязательно используй фразу: "${randomWord}".`;
         }
     }
 
-    const noInfoPhrases = {
-        'helpful': "Извините, в моей базе знаний нет информации об этом.",
-        'kind': "Ой, я пока этого не знаю 🥺",
-        'official': "Запрашиваемая информация отсутствует в базе данных.",
-        'joker': "Слушай, я не Википедия, такого не знаю! 😂",
-        'angry': "Отстань, я не знаю этого!",
-        'gopnik': "Слыш, я не в курсе за эту тему, в базе пусто."
-    };
-    const noInfoMsg = noInfoPhrases[aiPersonality] || noInfoPhrases['helpful'];
-
-    if (strictLevel >= 90) {
-        sysPrompt += `\nCRITICAL STRICTNESS: USE ONLY DATABASE INFO. IF NOT FOUND, SAY: "${noInfoMsg}"`;
-    } else {
-        sysPrompt += `\nPrioritize DATABASE.`;
-    }
-
-    if (aiBehavior === 'concise') sysPrompt += " Keep it very short.";
+    if (aiStrictness >= 90) sysPrompt += `\nStrictly use DATABASE ONLY.`;
+    if (aiBehavior === 'concise') sysPrompt += " Keep it short.";
     if (aiBehavior === 'detailed') sysPrompt += " Be detailed.";
 
     try {
@@ -295,28 +279,22 @@ const getAIResponse = async (question, userName) => {
                     { role: "system", content: sysPrompt + "\n\n[DATABASE]:\n" + kbContent },
                     { role: "user", content: question }
                 ],
-                temperature: aiProfanity ? 0.8 : 0.1,
+                temperature: aiProfanity ? 0.9 : 0.1,
                 max_tokens: 800
             })
         });
 
         const data = await res.json();
-        if (!res.ok) return `AI Error: ${data.error?.message}`;
         return data.choices?.[0]?.message?.content || "...";
-    } catch (e) { 
-        return "Ошибка сети AI."; 
-    }
+    } catch (e) { return "AI Error."; }
 };
 
 // ==========================================
-// 6. DATA HELPERS
+// 6. DATA HELPERS (FIXED RACE CONDITIONS)
 // ==========================================
-
 const ensureUserExists = async (user) => {
     if (!user || user.is_bot) return;
     const uid = String(user.id);
-    const currentUser = state.users[uid];
-    
     const updates = {
         id: user.id,
         name: user.first_name,
@@ -325,69 +303,64 @@ const ensureUserExists = async (user) => {
         lastActiveDate: new Date().toISOString(),
     };
 
-    if (!currentUser) {
-        updates.role = 'user';
-        updates.status = 'active';
-        updates.joinDate = new Date().toLocaleDateString();
-        updates.msgCount = 1;
-        updates.dailyMsgCount = 1;
-        await set(ref(db, `users/${uid}`), updates);
+    // FETCH FRESH DATA FROM DB (Do not rely on state.users to avoid stale overwrite)
+    const userRef = ref(db, `users/${uid}`);
+    const snap = await get(userRef);
+    const existing = snap.val();
+
+    if (!existing) {
+        await set(userRef, { ...updates, role: 'user', status: 'active', joinDate: new Date().toLocaleDateString(), msgCount: 1, dailyMsgCount: 1 });
     } else {
-        await firebaseUpdate(ref(db, `users/${uid}`), {
+        await firebaseUpdate(userRef, {
             ...updates,
-            msgCount: (currentUser.msgCount || 0) + 1,
-            dailyMsgCount: (currentUser.dailyMsgCount || 0) + 1
+            msgCount: (existing.msgCount || 0) + 1,
+            dailyMsgCount: (existing.dailyMsgCount || 0) + 1
         });
     }
 };
 
 const saveMessage = async (msgObj, uid, threadId) => {
-    // 1. Save to User CRM History
     if (uid) {
         const historyRef = ref(db, `users/${uid}/history`);
-        // Use transaction or safe read/write to ensure data integrity
         try {
-            const snap = await get(historyRef);
-            let hist = snap.val() || [];
-            if (!Array.isArray(hist)) hist = Object.values(hist);
-            
-            hist.push(msgObj);
-            // Limit history to 50 for CRM
-            if (hist.length > 50) hist = hist.slice(-50);
-            
-            await set(historyRef, hist);
-            
+            await runTransaction(historyRef, (currentHistory) => {
+                let history = currentHistory;
+                if (!history) history = [];
+                if (!Array.isArray(history)) history = Object.values(history);
+                history.push(msgObj);
+                if (history.length > 50) history = history.slice(-50);
+                return history;
+            });
+
             if (msgObj.dir === 'in') {
                 const unreadRef = ref(db, `users/${uid}/unreadCount`);
-                const uSnap = await get(unreadRef);
-                await set(unreadRef, (uSnap.val() || 0) + 1);
+                await runTransaction(unreadRef, (count) => (count || 0) + 1);
             }
-        } catch (e) { console.error("Save CRM msg error:", e); }
+        } catch (e) { console.error("CRM History Error:", e); }
     }
 
-    // 2. Save to Topic/LiveChat History
     if (threadId) {
         const topicRef = ref(db, `topicHistory/${threadId}`);
         try {
-            const snap = await get(topicRef);
-            let hist = snap.val() || [];
-            if (!Array.isArray(hist)) hist = Object.values(hist);
-            hist.push(msgObj);
-            // Limit topic history
-            if (hist.length > 100) hist = hist.slice(-100);
-            await set(topicRef, hist);
+            await runTransaction(topicRef, (currentHistory) => {
+                let history = currentHistory;
+                if (!history) history = [];
+                if (!Array.isArray(history)) history = Object.values(history);
+                history.push(msgObj);
+                if (history.length > 100) history = history.slice(-100);
+                return history;
+            });
 
             if (msgObj.dir === 'in') {
                 const unreadRef = ref(db, `topicUnreads/${threadId}`);
-                const uSnap = await get(unreadRef);
-                await set(unreadRef, (uSnap.val() || 0) + 1);
+                await runTransaction(unreadRef, (count) => (count || 0) + 1);
             }
-        } catch (e) { console.error("Save Topic msg error:", e); }
+        } catch (e) { console.error("Topic History Error:", e); }
     }
 };
 
 // ==========================================
-// 8. MAIN LOGIC (PROCESS UPDATE)
+// 8. MAIN PROCESSOR
 // ==========================================
 const processUpdate = async (upd) => {
     try {
@@ -399,46 +372,13 @@ const processUpdate = async (upd) => {
         const isPrivate = m.chat.type === 'private';
         const threadId = m.message_thread_id ? String(m.message_thread_id) : (isPrivate ? String(user.id) : 'general');
 
-        // 1. HANDLE LEFT MEMBERS (Delete from DB)
         if (m.left_chat_member) {
-            const leftUid = String(m.left_chat_member.id);
-            await remove(ref(db, `users/${leftUid}`));
+            await remove(ref(db, `users/${String(m.left_chat_member.id)}`));
             return;
         }
 
-        // 2. REGISTER GROUP
-        if (!isPrivate) {
-            const correctId = String(m.chat.id);
-            if (!state.groups[correctId]) {
-                 await set(ref(db, `groups/${correctId}`), { id: m.chat.id, title: m.chat.title, isDisabled: false, lastActive: new Date().toLocaleDateString() });
-            }
-            if (state.groups[correctId]?.isDisabled) return;
-        }
-
-        // 3. REGISTER USER & LOG MESSAGE
         if (user && !user.is_bot) {
             await ensureUserExists(user);
-
-            // Welcome New Members
-            if (m.new_chat_members) {
-                 const welcome = state.commands.find(c => c.trigger === '_welcome_');
-                 if (welcome) {
-                    for (const member of m.new_chat_members) {
-                        if (member.is_bot) continue;
-                        await ensureUserExists(member);
-                        let text = welcome.response.replace(/{user}/g, `<a href="tg://user?id=${member.id}">${member.first_name}</a>`).replace(/{name}/g, member.first_name);
-                        const kb = welcome.buttons?.length > 0 ? { inline_keyboard: welcome.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
-                        
-                        if (welcome.mediaUrl) {
-                            await apiCall('sendPhoto', { chat_id: cid, photo: welcome.mediaUrl, caption: text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: threadId!=='general'?threadId:undefined });
-                        } else {
-                            await apiCall('sendMessage', { chat_id: cid, text: text, parse_mode: 'HTML', reply_markup: kb, message_thread_id: threadId!=='general'?threadId:undefined });
-                        }
-                    }
-                 }
-            }
-
-            // Save Message to DB
             if (m.text || m.caption || m.photo || m.video) {
                 const msgText = m.text || m.caption || (m.photo ? '[Photo]' : '[Video]');
                 const newMsg = {
@@ -458,18 +398,15 @@ const processUpdate = async (upd) => {
                     const topicName = isPrivate ? `${user.first_name} (ЛС)` : (m.reply_to_message?.forum_topic_created?.name || `Topic ${threadId}`);
                     await set(ref(db, `topicNames/${threadId}`), topicName);
                 }
-
                 await saveMessage(newMsg, String(user.id), threadId);
             }
         }
 
-        if (!state.isBotActive) return;
-
-        // 4. COMMANDS & AI
-        if (!m.text || user.is_bot) return;
+        if (!state.isBotActive || !m.text || user.is_bot) return;
         const txt = m.text.trim();
         const lowerTxt = txt.toLowerCase();
 
+        // 1. Commands
         for (const cmd of state.commands) {
             let match = false;
             if (cmd.matchType === 'exact') match = lowerTxt === cmd.trigger.toLowerCase();
@@ -479,117 +416,60 @@ const processUpdate = async (upd) => {
             if (match) {
                 const dbUser = state.users[String(user.id)];
                 const dbUserRole = dbUser?.role || 'user';
-                
                 if (cmd.isSystem && dbUserRole !== 'admin') continue;
                 
                 const allowedRoles = cmd.allowedRoles || ['user', 'admin'];
                 if (!allowedRoles.includes(dbUserRole)) continue;
 
-                if (cmd.allowedTopicId) {
-                    if (cmd.allowedTopicId === 'private_only' && !isPrivate) continue;
-                    if (cmd.allowedTopicId !== 'private_only' && cmd.allowedTopicId !== String(threadId) && cmd.allowedTopicId !== 'general' && !isPrivate) continue;
-                }
+                if (cmd.allowedTopicId && cmd.allowedTopicId !== 'private_only' && cmd.allowedTopicId !== String(threadId) && !isPrivate) continue;
 
-                let resp = cmd.response.replace(/{user}/g, user.first_name).replace(/{name}/g, user.first_name);
-                
-                // Generic Warning display for self-check
-                if (resp.includes('{warns}')) {
-                    const currentWarns = dbUser?.warnings || 0;
-                    resp = resp.replace(/{warns}/g, currentWarns);
-                }
-
+                let resp = cmd.response.replace(/{user}/g, user.first_name).replace(/{warns}/g, dbUser?.warnings || 0);
                 const kb = cmd.buttons?.length > 0 ? { inline_keyboard: cmd.buttons.map(b => [{ text: b.text, url: b.url }]) } : undefined;
-                const targetThread = threadId !== 'general' ? threadId : undefined;
 
                 if (cmd.mediaUrl) {
-                    await apiCall('sendPhoto', { chat_id: cid, photo: cmd.mediaUrl, caption: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThread });
+                    await apiCall('sendPhoto', { chat_id: cid, photo: cmd.mediaUrl, caption: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: !isPrivate && threadId !== 'general' ? threadId : undefined });
                 } else {
-                    await apiCall('sendMessage', { chat_id: cid, text: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: targetThread });
+                    await apiCall('sendMessage', { chat_id: cid, text: resp, parse_mode: 'HTML', reply_markup: kb, message_thread_id: !isPrivate && threadId !== 'general' ? threadId : undefined });
                 }
                 
-                await saveMessage({
-                    dir: 'out',
-                    text: `[CMD] ${cmd.trigger}`,
-                    type: 'text',
-                    time: new Date().toLocaleTimeString('ru-RU'),
-                    timestamp: Date.now(),
-                    isIncoming: false,
-                    isGroup: !isPrivate,
-                    user: 'Bot'
-                }, String(user.id), threadId);
+                await saveMessage({ dir: 'out', text: `[CMD] ${cmd.trigger}`, type: 'text', time: new Date().toLocaleTimeString('ru-RU'), timestamp: Date.now(), isIncoming: false, isGroup: !isPrivate, user: 'Bot' }, String(user.id), threadId);
                 return;
             }
         }
 
-        // Check AI
+        // 2. AI
         if (state.config.enableAI) {
-            // FIX: Check if PM is allowed. If PM disabled, and chat is private, STOP.
             if (isPrivate && !state.config.enablePM) return;
-
             const isHelixTrigger = lowerTxt.startsWith('хеликс') || lowerTxt.startsWith('helix');
             
-            if (isHelixTrigger || isPrivate) { // Allow AI in private without trigger if enabled
-                // But wait, user requested "Helix" trigger specific logic in previous turns? 
-                // Based on LATEST request: "If enablePM OFF -> Helix does not answer". 
-                // Implicitly implies if enablePM ON -> Helix answers. 
-                // We'll stick to the "isHelixTrigger" check generally, but for PMs, usual bot behavior is to answer everything.
-                // However, to satisfy "Trigger starts with Helix" from previous prompts AND "PM OFF = No Answer":
-                
-                // Final Logic: 
-                // 1. If PM OFF and Private -> Return.
-                // 2. If Private -> Answer (checking trigger optional based on preference, but usually PM = direct chat).
-                // 3. If Group -> Must start with Helix.
-                
-                if (isPrivate && !state.config.enablePM) return;
-                
-                // If group, must start with Helix. If private, can answer directly (standard bot behavior) OR require trigger.
-                // Re-reading prompt: "Helix answers ONLY if word starts with Helix".
-                // So strict trigger check applies to BOTH.
-                if (isHelixTrigger) {
-                    if (state.disabledAiTopics && state.disabledAiTopics.includes(String(threadId))) return;
+            if (isHelixTrigger) {
+                // FIXED TOPIC CHECK
+                if (state.disabledAiTopics && state.disabledAiTopics.includes(String(threadId))) return;
 
-                    const q = txt.replace(/^(хеликс|helix)/i, '').trim();
-                    if (q) {
-                        const a = await getAIResponse(q, user.first_name);
-                        
-                        await apiCall('sendMessage', { 
-                            chat_id: cid, 
-                            text: a, 
-                            reply_to_message_id: m.message_id, 
-                            message_thread_id: threadId !== 'general' ? threadId : undefined 
-                        });
+                const q = txt.replace(/^(хеликс|helix)/i, '').trim();
+                if (q) {
+                    const a = await getAIResponse(q, user.first_name);
+                    await apiCall('sendMessage', { chat_id: cid, text: a, reply_to_message_id: m.message_id, message_thread_id: !isPrivate && threadId !== 'general' ? threadId : undefined });
 
-                        await saveMessage({
-                            dir: 'out',
-                            text: a,
-                            type: 'text',
-                            time: new Date().toLocaleTimeString('ru-RU'),
-                            timestamp: Date.now(),
-                            isIncoming: false,
-                            isGroup: !isPrivate,
-                            user: 'Helix AI'
-                        }, String(user.id), threadId);
-                        
-                        const newStat = { query: q, response: a, time: Date.now() };
-                        const statsRef = ref(db, 'aiStats');
-                        const statsSnap = await get(statsRef);
-                        let stats = statsSnap.val() || { total: 0, history: [] };
-                        if(!stats.history) stats.history = [];
-                        if(!Array.isArray(stats.history)) stats.history = Object.values(stats.history);
-                        stats.history.push(newStat);
-                        stats.total = (stats.total || 0) + 1;
-                        if(stats.history.length > 200) stats.history = stats.history.slice(-200);
-                        await set(statsRef, stats);
-                    }
+                    await saveMessage({ dir: 'out', text: a, type: 'text', time: new Date().toLocaleTimeString('ru-RU'), timestamp: Date.now(), isIncoming: false, isGroup: !isPrivate, user: 'Helix AI' }, String(user.id), threadId);
+                    
+                    const statsRef = ref(db, 'aiStats');
+                    await runTransaction(statsRef, (s) => {
+                        if(!s) s = { total: 0, history: [] };
+                        if(!s.history) s.history = [];
+                        s.history.push({ query: q, response: a, time: Date.now() });
+                        s.total = (s.total || 0) + 1;
+                        if(s.history.length > 100) s.history = s.history.slice(-100);
+                        return s;
+                    });
                 }
             }
         }
-
-    } catch (e) { console.error("Process error:", e); }
+    } catch (e) { console.error("Update Error:", e); }
 };
 
 const start = async () => {
-    console.log("Bot Server Started.");
+    console.log("Bot Server Running...");
     while (true) {
         if (state.config.token) {
             try {
@@ -600,10 +480,7 @@ const start = async () => {
                         await processUpdate(u);
                     }
                 }
-            } catch (e) { 
-                console.error("Loop error:", e);
-                await new Promise(r => setTimeout(r, 5000)); 
-            }
+            } catch (e) { await new Promise(r => setTimeout(r, 5000)); }
         } else { await new Promise(r => setTimeout(r, 2000)); }
     }
 };

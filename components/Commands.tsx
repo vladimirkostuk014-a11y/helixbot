@@ -37,19 +37,13 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
             mediaUrl: currentCmd.mediaUrl || '',
             buttons: currentCmd.buttons || [],
             isSystem: currentCmd.isSystem || false,
-            muteDuration: currentCmd.muteDuration, 
             allowedTopicId: currentCmd.allowedTopicId || undefined,
             notificationTopicId: currentCmd.notificationTopicId || undefined,
             allowedRoles: currentCmd.allowedRoles || ['user', 'admin'],
             color: currentCmd.color 
         };
 
-        let newCommands;
-        if (currentCmd.id) {
-            newCommands = commands.map(c => c.id === currentCmd.id ? newCmd : c);
-        } else {
-            newCommands = [...commands, newCmd];
-        }
+        let newCommands = currentCmd.id ? commands.map(c => c.id === currentCmd.id ? newCmd : c) : [...commands, newCmd];
         setCommands(newCommands);
         saveData('commands', newCommands);
         setIsEditing(false);
@@ -83,17 +77,12 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
         }
     };
 
-    const toggleRole = (role: 'user' | 'admin') => {
-        const currentRoles = currentCmd.allowedRoles || ['user', 'admin'];
-        if (currentRoles.includes(role)) {
-            setCurrentCmd({ ...currentCmd, allowedRoles: currentRoles.filter(r => r !== role) as any });
-        } else {
-            setCurrentCmd({ ...currentCmd, allowedRoles: [...currentRoles, role] as any });
-        }
-    };
+    // Filter out old admin commands
+    const bannedTriggers = ['_warn_', '/warn', '_mute_', '/mute', '_ban_', '/ban', '_kick_', '/kick', '_unwarn_', '/unwarn', '_unmute_', '/unmute', '_unban_', '/unban'];
+    const visibleCommands = commands.filter(c => !bannedTriggers.some(t => c.trigger.toLowerCase().includes(t)));
 
-    const systemCmds = commands.filter(c => c.isSystem).sort((a, b) => (a.color || 'Default').localeCompare(b.color || 'Default'));
-    const customCmds = commands.filter(c => !c.isSystem);
+    const systemCmds = visibleCommands.filter(c => c.isSystem).sort((a, b) => (a.color || 'Default').localeCompare(b.color || 'Default'));
+    const customCmds = visibleCommands.filter(c => !c.isSystem);
     const getCmdStyle = (colorName?: string) => { const theme = COLORS.find(c => c.name === colorName) || COLORS[0]; return `${theme.bg} ${theme.border}`; };
 
     return (
@@ -119,7 +108,6 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
                                         <div key={cmd.id} onClick={() => { setCurrentCmd(cmd); setPreviewMedia(cmd.mediaUrl || null); setIsEditing(true); }} className={`p-3 rounded cursor-pointer border transition-colors ${getCmdStyle(cmd.color)} ${currentCmd.id === cmd.id ? 'ring-1 ring-white' : 'hover:brightness-110'}`}>
                                             <div className="flex justify-between items-center">
                                                 <span className={`font-bold ${cmd.isSystem ? 'text-yellow-400' : 'text-blue-400'}`}>{cmd.trigger}</span>
-                                                {cmd.mediaUrl && <Icons.Upload size={12} className="text-gray-400"/>}
                                             </div>
                                         </div>
                                     ))}
@@ -127,13 +115,6 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
                             )}
                         </div>
                     ))}
-                    
-                    {!commands.find(c => c.trigger === '_welcome_') && (
-                        <button onClick={() => { setCurrentCmd({ trigger: '_welcome_', isSystem: true, response: 'Привет, {user}!', buttons: [], matchType: 'exact', color: 'Green' }); setIsEditing(true); }} className="w-full py-2 bg-green-900/20 text-green-400 border border-green-500/30 rounded text-xs font-bold">+ Добавить Приветствие (_welcome_)</button>
-                    )}
-                    {!commands.find(c => c.trigger === '_daily_top_') && (
-                        <button onClick={() => { setCurrentCmd({ trigger: '_daily_top_', isSystem: true, response: '🏆 Топ за день:', buttons: [], matchType: 'exact', color: 'Gold' }); setIsEditing(true); }} className="w-full py-2 bg-yellow-900/20 text-yellow-400 border border-yellow-500/30 rounded text-xs font-bold">+ Добавить Топ Дня (_daily_top_)</button>
-                    )}
                 </div>
             </div>
             
@@ -141,64 +122,35 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
                 {isEditing ? (
                     <div className="space-y-5">
                         <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                            {currentCmd.id ? 'Настройка команды' : 'Создание команды'}
+                            {currentCmd.id ? 'Настройка' : 'Создание'}
                             {currentCmd.isSystem && <span className="text-xs bg-yellow-600 px-2 py-0.5 rounded text-black font-bold">SYSTEM</span>}
                         </h3>
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label className="text-xs text-gray-500 uppercase font-bold block mb-1">Триггер</label>
-                                <input disabled={currentCmd.isSystem} value={currentCmd.trigger} onChange={e => setCurrentCmd({...currentCmd, trigger: e.target.value})} className={`w-full bg-gray-900 border border-gray-600 rounded p-2.5 text-white ${currentCmd.isSystem ? 'opacity-50 cursor-not-allowed' : ''}`} placeholder="/start"/>
+                                <input disabled={currentCmd.isSystem} value={currentCmd.trigger} onChange={e => setCurrentCmd({...currentCmd, trigger: e.target.value})} className="w-full bg-gray-900 border border-gray-600 rounded p-2.5 text-white" placeholder="/start"/>
                             </div>
                             <div>
-                                <label className="text-xs text-gray-500 uppercase font-bold block mb-1">
-                                    {currentCmd.isSystem ? 'Куда писать отчет' : 'Где работает'}
-                                </label>
-                                <select 
-                                    value={currentCmd.isSystem ? (currentCmd.notificationTopicId || '') : (currentCmd.allowedTopicId || '')} 
-                                    onChange={e => {
+                                <label className="text-xs text-gray-500 uppercase font-bold block mb-1">Область</label>
+                                <select value={currentCmd.isSystem ? (currentCmd.notificationTopicId || '') : (currentCmd.allowedTopicId || '')} onChange={e => {
                                         const val = e.target.value || undefined;
                                         if (currentCmd.isSystem) setCurrentCmd({...currentCmd, notificationTopicId: val});
                                         else setCurrentCmd({...currentCmd, allowedTopicId: val});
-                                    }} 
-                                    className="w-full bg-gray-900 border border-gray-600 rounded p-2.5 text-white outline-none"
-                                >
-                                    <option value="">{currentCmd.isSystem ? 'В тот же чат' : 'Везде (Все чаты)'}</option>
+                                    }} className="w-full bg-gray-900 border border-gray-600 rounded p-2.5 text-white outline-none">
+                                    <option value="">Везде</option>
                                     {!currentCmd.isSystem && <option value="private_only">Только ЛС</option>}
-                                    {Object.entries(topicNames).map(([id, name]) => (
-                                        <option key={id} value={id}>{name}</option>
-                                    ))}
+                                    {Object.entries(topicNames).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
                                 </select>
                             </div>
                         </div>
 
-                        {/* FIX 9: Permission Selector */}
-                        {!currentCmd.isSystem && (
-                            <div>
-                                <label className="text-xs text-gray-500 uppercase font-bold block mb-2">Кто может использовать?</label>
-                                <div className="flex gap-4">
-                                    <button 
-                                        onClick={() => toggleRole('user')}
-                                        className={`px-3 py-1.5 rounded-lg border text-sm font-bold flex items-center gap-2 ${currentCmd.allowedRoles?.includes('user') ? 'bg-blue-600 border-blue-500 text-white' : 'bg-transparent border-gray-700 text-gray-500'}`}
-                                    >
-                                        <Icons.Users size={14}/> Обычные пользователи
-                                    </button>
-                                    <button 
-                                        onClick={() => toggleRole('admin')}
-                                        className={`px-3 py-1.5 rounded-lg border text-sm font-bold flex items-center gap-2 ${currentCmd.allowedRoles?.includes('admin') ? 'bg-yellow-600 border-yellow-500 text-black' : 'bg-transparent border-gray-700 text-gray-500'}`}
-                                    >
-                                        <Icons.Shield size={14}/> Админы
-                                    </button>
-                                </div>
-                            </div>
-                        )}
-                        
                         <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
-                             <label className="text-xs text-gray-500 uppercase font-bold block mb-2">Медиа (Фото/Видео)</label>
+                             <label className="text-xs text-gray-500 uppercase font-bold block mb-2">Медиа</label>
                              <div className="flex gap-4 items-center">
-                                 <label className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded cursor-pointer border border-gray-600 transition-colors">
+                                 <label className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded cursor-pointer border border-gray-600">
                                      <Icons.Upload size={16}/>
-                                     <span className="text-xs font-bold text-gray-300">Загрузить файл</span>
+                                     <span className="text-xs font-bold text-gray-300">Загрузить</span>
                                      <input type="file" onChange={handleFileUpload} className="hidden"/>
                                  </label>
                                  {(currentCmd.mediaUrl || previewMedia) && (
@@ -210,35 +162,19 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
                              </div>
                         </div>
 
-                        <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
-                            <label className="text-xs text-gray-500 uppercase font-bold block mb-2">Кнопки (Ссылки)</label>
-                            <div className="flex gap-2 mb-2">
-                                <input value={buttonDraft.text} onChange={e => setButtonDraft({...buttonDraft, text: e.target.value})} placeholder="Текст" className="w-1/3 bg-black border border-gray-600 rounded px-2 py-1 text-xs text-white"/>
-                                <input value={buttonDraft.url} onChange={e => setButtonDraft({...buttonDraft, url: e.target.value})} placeholder="URL" className="flex-1 bg-black border border-gray-600 rounded px-2 py-1 text-xs text-white"/>
-                                <button onClick={handleAddButton} className="bg-gray-800 px-2 rounded hover:bg-gray-700"><Icons.Plus size={14}/></button>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                                {currentCmd.buttons?.map((b, i) => (
-                                    <span key={i} className="bg-blue-900/30 border border-blue-500/30 text-blue-200 px-2 py-1 rounded text-xs flex items-center gap-2">
-                                        {b.text} <button onClick={() => setCurrentCmd(prev => ({...prev, buttons: prev.buttons?.filter((_, idx) => idx !== i)}))} className="hover:text-white"><Icons.X size={10}/></button>
-                                    </span>
-                                ))}
-                            </div>
-                        </div>
-
                         <div>
-                            <label className="text-xs text-gray-500 uppercase font-bold block mb-1">Ответ бота</label>
-                            <textarea rows={4} value={currentCmd.response} onChange={e => setCurrentCmd({...currentCmd, response: e.target.value})} className="w-full bg-gray-900 border border-gray-600 rounded-xl p-3 text-white font-mono text-sm" placeholder="Текст ответа... (поддерживает {user})" />
+                            <label className="text-xs text-gray-500 uppercase font-bold block mb-1">Ответ</label>
+                            <textarea rows={4} value={currentCmd.response} onChange={e => setCurrentCmd({...currentCmd, response: e.target.value})} className="w-full bg-gray-900 border border-gray-600 rounded-xl p-3 text-white font-mono text-sm" placeholder="Текст..."/>
                         </div>
                         
                         <div className="flex justify-end gap-3 pt-4">
-                            {currentCmd.id && !currentCmd.isSystem && <button onClick={() => handleDelete(currentCmd.id!)} className="text-red-400 px-4 py-2 hover:bg-red-900/20 rounded font-bold">Удалить</button>}
-                            <button onClick={handleSave} className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 px-8 py-2.5 rounded-xl text-white font-bold shadow-lg shadow-blue-900/20">Сохранить</button>
+                            {currentCmd.id && !currentCmd.isSystem && <button onClick={() => handleDelete(currentCmd.id!)} className="text-red-400 px-4 py-2 rounded font-bold">Удалить</button>}
+                            <button onClick={handleSave} className="bg-blue-600 hover:bg-blue-500 px-8 py-2.5 rounded-xl text-white font-bold">Сохранить</button>
                         </div>
                     </div>
                 ) : (
-                    <div className="flex items-center justify-center h-full text-gray-500 bg-gray-900/10 rounded-xl border border-dashed border-gray-700 min-h-[300px]">
-                        <p>Выберите команду для настройки</p>
+                    <div className="flex items-center justify-center h-full text-gray-500 border border-dashed border-gray-700">
+                        <p>Выберите команду</p>
                     </div>
                 )}
             </div>

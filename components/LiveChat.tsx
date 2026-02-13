@@ -162,11 +162,6 @@ const LiveChat: React.FC<LiveChatProps> = ({
         return timeB - timeA;
     });
 
-    // Mobile logic: 
-    // If activeTopic is set -> show chat (hide list on mobile)
-    // If activeTopic is NOT set -> show list (hide chat on mobile)
-    // On Desktop -> show both
-
     return (
         <div className="flex flex-col md:flex-row gap-4 h-[calc(100vh-140px)] md:h-[calc(100vh-100px)]">
             {/* Sidebar: Topics */}
@@ -239,7 +234,7 @@ const LiveChat: React.FC<LiveChatProps> = ({
                                     <Icons.Edit2 size={12}/>
                                 </button>
                                 {onDeleteTopic && (
-                                    <button onClick={(e) => handleDeleteTopicClick(tid, e)} className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-500 p-1">
+                                    <button onClick={(e) => handleDeleteTopicClick(tid, e)} className="text-gray-500 hover:text-red-500 p-1" title="Удалить">
                                         <Icons.Trash2 size={12}/>
                                     </button>
                                 )}
