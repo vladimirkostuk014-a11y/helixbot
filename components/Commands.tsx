@@ -145,6 +145,39 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
                             </div>
                         </div>
 
+                         {/* NEW: Role Selection */}
+                         <div>
+                            <label className="text-xs text-gray-500 uppercase font-bold block mb-2">Кто может использовать?</label>
+                            <div className="flex gap-4">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input 
+                                        type="checkbox" 
+                                        checked={currentCmd.allowedRoles?.includes('user')} 
+                                        onChange={e => {
+                                            const roles = currentCmd.allowedRoles || [];
+                                            if (e.target.checked) setCurrentCmd({ ...currentCmd, allowedRoles: [...roles, 'user'] });
+                                            else setCurrentCmd({ ...currentCmd, allowedRoles: roles.filter(r => r !== 'user') });
+                                        }}
+                                        className="accent-blue-500"
+                                    />
+                                    <span className="text-sm text-white">Обычный User</span>
+                                </label>
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input 
+                                        type="checkbox" 
+                                        checked={currentCmd.allowedRoles?.includes('admin')} 
+                                        onChange={e => {
+                                            const roles = currentCmd.allowedRoles || [];
+                                            if (e.target.checked) setCurrentCmd({ ...currentCmd, allowedRoles: [...roles, 'admin'] });
+                                            else setCurrentCmd({ ...currentCmd, allowedRoles: roles.filter(r => r !== 'admin') });
+                                        }}
+                                        className="accent-yellow-500"
+                                    />
+                                    <span className="text-sm text-yellow-400">Админ</span>
+                                </label>
+                            </div>
+                        </div>
+
                         <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
                              <label className="text-xs text-gray-500 uppercase font-bold block mb-2">Медиа</label>
                              <div className="flex gap-4 items-center">
@@ -160,6 +193,23 @@ const Commands: React.FC<CommandsProps> = ({ commands, setCommands, topicNames =
                                      </div>
                                  )}
                              </div>
+                        </div>
+
+                         {/* NEW: Buttons Editor for Custom Commands */}
+                         <div className="bg-black/30 p-4 rounded-xl border border-gray-800">
+                            <label className="text-xs text-gray-500 uppercase font-bold mb-3 block">Кнопки (Inline)</label>
+                            <div className="flex gap-2 mb-3">
+                                <input value={buttonDraft.text} onChange={e => setButtonDraft({...buttonDraft, text: e.target.value})} placeholder="Текст" className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"/>
+                                <input value={buttonDraft.url} onChange={e => setButtonDraft({...buttonDraft, url: e.target.value})} placeholder="URL" className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"/>
+                                <button onClick={handleAddButton} className="bg-gray-800 hover:bg-gray-700 text-white px-3 rounded-lg"><Icons.Plus/></button>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                {currentCmd.buttons?.map((b, i) => (
+                                    <span key={i} className="bg-blue-900/30 border border-blue-500/30 text-blue-200 px-3 py-1.5 rounded-lg text-sm flex items-center gap-2">
+                                        {b.text} <button onClick={() => setCurrentCmd(prev => ({ ...prev, buttons: prev.buttons?.filter((_, idx) => idx !== i) }))} className="hover:text-white"><Icons.X size={12}/></button>
+                                    </span>
+                                ))}
+                            </div>
                         </div>
 
                         <div>

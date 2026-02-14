@@ -318,6 +318,13 @@ const LiveChat: React.FC<LiveChatProps> = ({
                                 <input value={btnDraft.url} onChange={e => setBtnDraft({...btnDraft, url: e.target.value})} placeholder="URL" className="flex-1 bg-black border border-gray-600 rounded px-2 py-1 text-xs text-white"/>
                                 <button onClick={addBtn} className="bg-blue-600 px-2 rounded text-white"><Icons.Plus size={14}/></button>
                             </div>
+                            {buttons.length > 0 && (
+                                <div className="flex flex-wrap gap-2 mt-2">
+                                    {buttons.map((b, i) => (
+                                        <span key={i} className="bg-blue-900/30 border border-blue-500/30 px-2 py-0.5 rounded text-[10px] flex items-center gap-1 text-blue-200">{b.text} <button onClick={() => setButtons(buttons.filter((_, idx) => idx !== i))}><Icons.X size={10}/></button></span>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     )}
                     <div className="flex gap-2 items-end">

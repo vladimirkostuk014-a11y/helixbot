@@ -100,9 +100,12 @@ const apiCall = async (method, body) => {
             Object.keys(body).forEach(key => {
                 if (key !== mediaField && body[key] !== undefined) {
                     let val = body[key];
-                    // CRITICAL FIX: Ensure buttons/objects are stringified when using FormData
-                    if (typeof val === 'object') val = JSON.stringify(val);
-                    form.append(key, val);
+                    // CRITICAL FIX: Explicitly stringify objects (like reply_markup) when using FormData
+                    if (typeof val === 'object') {
+                        form.append(key, JSON.stringify(val));
+                    } else {
+                        form.append(key, val);
+                    }
                 }
             });
             
@@ -197,12 +200,12 @@ const sendDailyTop = async () => {
 };
 
 // ==========================================
-// 5. AI LOGIC (IMPROVED + MEDIA HANDLING)
+// 5. AI LOGIC (SINGLE PROMPT SYSTEM)
 // ==========================================
 const getAIResponse = async (question, userName) => {
     let { 
-        aiBaseUrl, aiModel, aiPersonality, aiProfanity, customProfanityList, 
-        aiStrictness, aiBehavior, systemPromptOverride, personalityPrompts, toxicPrompt 
+        aiBaseUrl, aiModel, aiProfanity, customProfanityList, 
+        aiStrictness, systemPromptOverride, toxicPrompt 
     } = state.config;
     
     let apiKeyToUse = "";
@@ -210,7 +213,6 @@ const getAIResponse = async (question, userName) => {
         const configSnap = await get(ref(db, 'config'));
         const liveConfig = configSnap.val() || {};
         apiKeyToUse = (liveConfig.openaiApiKey || "").trim();
-        if (liveConfig.personalityPrompts) personalityPrompts = liveConfig.personalityPrompts;
         if (liveConfig.toxicPrompt) toxicPrompt = liveConfig.toxicPrompt;
     } catch (e) { apiKeyToUse = (state.config.openaiApiKey || "").trim(); }
 
@@ -223,41 +225,35 @@ const getAIResponse = async (question, userName) => {
 
     let sysPrompt = "";
 
+    // 1. Single System Prompt Logic (Manual or Default)
     if (systemPromptOverride && systemPromptOverride.trim().length > 0) {
         sysPrompt = systemPromptOverride;
     } else {
-        const DEFAULT_PERSONA_PROMPTS = {
-            'helpful': 'Ты полезный и вежливый помощник Хеликс.',
-            'kind': 'Ты очень добрый, милый и заботливый помощник.',
-            'official': 'Ты строгий официальный бот. Отвечай сухо и формально.',
-            'joker': 'Ты стендап-комик. Постоянно шути, используй сарказм.',
-            'angry': 'Ты злой бот. Ты ненавидишь глупые вопросы и людей.',
-            'gopnik': 'Ты четкий пацанчик. Общайся на "ты", используй дворовый сленг.'
-        };
-
-        let rolePrompt = (personalityPrompts && personalityPrompts[aiPersonality]) ? personalityPrompts[aiPersonality] : (DEFAULT_PERSONA_PROMPTS[aiPersonality] || DEFAULT_PERSONA_PROMPTS['helpful']);
-        sysPrompt = `Роль: ${rolePrompt}\nИмя пользователя: ${userName}\nЯзык ответов: Русский.\n`;
-
-        if (aiStrictness >= 100) {
-            sysPrompt += `\n[РЕЖИМ МАКСИМАЛЬНОЙ СТРОГОСТИ]:\n1. Отвечай ТОЛЬКО на основе [DATABASE].\n2. Если нет ответа, пиши: "Информации нет."`;
-        } else {
-            sysPrompt += `\nИспользуй [DATABASE] как источник.`;
-        }
-
-        if (aiBehavior === 'concise') sysPrompt += "\n[СТИЛЬ]: Коротко, 1-2 предложения.";
-        else if (aiBehavior === 'detailed') sysPrompt += "\n[СТИЛЬ]: Подробно.";
-
-        if (aiProfanity) {
-            const DEFAULT_TOXIC_PROMPT = `[РЕЖИМ ТОКСИЧНОСТИ]:\n1. ОБЯЗАН использовать мат (бля, нахуй, сука).\n2. Унижай за глупость.\n3. Будь агрессивным.`;
-            sysPrompt += `\n\n${toxicPrompt || DEFAULT_TOXIC_PROMPT}`;
-            if (customProfanityList && customProfanityList.length > 0) {
-                 const randomWord = customProfanityList[Math.floor(Math.random() * customProfanityList.length)];
-                 sysPrompt += `\nВставь фразу: "${randomWord}".`;
-            }
-        }
-        
-        sysPrompt += `\n\n[ИНСТРУКЦИЯ ПО ФОТО]: Если ты берешь ответ из записи, у которой есть ID (напр [ID: xyz]), ОБЯЗАТЕЛЬНО добавь в конец ответа тег: [MEDIA_ID: id_записи].`;
+        // Fallback Default
+        sysPrompt = `Ты — Хеликс, умный и полезный помощник.\nТвоя цель — помогать пользователям.\nОтвечай на Русском языке.`;
     }
+    
+    sysPrompt += `\n\nИмя пользователя: ${userName}`;
+
+    // 2. Strictness
+    if (aiStrictness >= 90) {
+        sysPrompt += `\n\n[ВАЖНО]: Отвечай ТОЛЬКО на основе [DATABASE]. Если нет ответа, пиши: "Информации нет." Не выдумывай.`;
+    } else {
+        sysPrompt += `\n\nИспользуй [DATABASE] как источник.`;
+    }
+
+    // 3. Toxic Mode
+    if (aiProfanity) {
+        const DEFAULT_TOXIC_PROMPT = `[РЕЖИМ ТОКСИЧНОСТИ]:\n1. ОБЯЗАН использовать мат (бля, нахуй, сука).\n2. Унижай за глупость.\n3. Будь агрессивным.`;
+        sysPrompt += `\n\n${toxicPrompt || DEFAULT_TOXIC_PROMPT}`;
+        if (customProfanityList && customProfanityList.length > 0) {
+             const randomWord = customProfanityList[Math.floor(Math.random() * customProfanityList.length)];
+             sysPrompt += `\nВставь фразу: "${randomWord}".`;
+        }
+    }
+    
+    // 4. Media Tag Instruction
+    sysPrompt += `\n\n[ИНСТРУКЦИЯ ПО ФОТО]: Если ты берешь ответ из записи, у которой есть ID (напр [ID: xyz]), ОБЯЗАТЕЛЬНО добавь в конец ответа тег: [MEDIA_ID: id_записи].`;
 
     try {
         const res = await fetch(`${aiBaseUrl || 'https://api.groq.com/openai/v1'}/chat/completions`, {
@@ -272,8 +268,8 @@ const getAIResponse = async (question, userName) => {
                     { role: "system", content: sysPrompt + "\n\n[DATABASE]:\n" + kbContent },
                     { role: "user", content: question }
                 ],
-                // Increase temp for Toxic mode to bypass safety filters
-                temperature: aiProfanity ? 1.1 : 0.1,
+                // Increase temp for Toxic mode to bypass safety filters, lower for Strict
+                temperature: aiProfanity ? 1.0 : 0.3,
                 max_tokens: 800
             })
         });

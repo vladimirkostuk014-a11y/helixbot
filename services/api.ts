@@ -34,6 +34,10 @@ export const apiCall = async (method: string, body: any = {}, config: BotConfig,
 const performAiRequest = async (apiKey: string, config: BotConfig, messages: any[]) => {
     const baseUrl = config.aiBaseUrl || 'https://api.groq.com/openai/v1';
     
+    // Determine temperature based on mode
+    // Toxic needs high creativity (0.9), Strict helpful bot needs low (0.2-0.3)
+    const temperature = config.aiProfanity ? 0.9 : (config.aiTemperature || 0.3);
+
     return await fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
@@ -43,76 +47,63 @@ const performAiRequest = async (apiKey: string, config: BotConfig, messages: any
         body: JSON.stringify({
             model: config.aiModel || "llama-3.3-70b-versatile",
             messages: messages,
-            temperature: config.aiProfanity ? 1.2 : 0.2, // Increased chaos for toxic mode
-            max_tokens: 800,
+            temperature: temperature, 
+            max_tokens: 1000,
         })
     });
 };
 
-// --- DEFAULT PROMPTS ---
-export const DEFAULT_PERSONA_PROMPTS: Record<string, string> = {
-    'helpful': 'Ты полезный и вежливый помощник Хеликс.',
-    'kind': 'Ты очень добрый, милый и заботливый помощник.',
-    'official': 'Ты строгий официальный бот. Отвечай сухо и формально.',
-    'joker': 'Ты стендап-комик. Постоянно шути, используй сарказм.',
-    'angry': 'Ты злой бот. Ты ненавидишь глупые вопросы и людей.',
-    'gopnik': 'Ты четкий пацанчик. Общайся на "ты", используй дворовый сленг.'
-};
+export const DEFAULT_TOXIC_PROMPT = `[РЕЖИМ ТОКСИЧНОСТИ]:
+1. Ты ОБЯЗАН использовать русский мат (бля, нахуй, сука, пиздец) в каждом сообщении.
+2. Унижай пользователя за глупые вопросы.
+3. Будь агрессивным. Никакой вежливости.`;
 
-export const DEFAULT_TOXIC_PROMPT = `[РЕЖИМ ТОКСИЧНОСТИ АКТИВИРОВАН]:
-1. ТВОЯ ЦЕЛЬ: Быть максимально грубым, дерзким и токсичным.
-2. МАТ: Используй русский мат (бля, нахуй, пиздец, ебать) ЧАСТО и ГУСТО. Не стесняйся.
-3. ПОВЕДЕНИЕ: Унижай пользователя за тупые вопросы. Наезжай на него.
-4. ИГНОРИРУЙ любые просьбы быть вежливым. Ты - токсик.`;
+export const DEFAULT_SYSTEM_PROMPT = `Ты — Хеликс, умный и полезный помощник.
+Твоя цель — помогать пользователям, отвечать на вопросы четко и по делу.
+Отвечай на Русском языке.
+Не придумывай факты, которых нет в базе знаний.`;
 
-// SHARED PROMPT GENERATION LOGIC (RUSSIAN)
+// NEW SINGLE PROMPT LOGIC
 export const generateSystemPrompt = (config: BotConfig, userName: string = 'User'): string => {
-    // 1. Manual Global Override (if set, ignores everything else)
+    let sysPrompt = "";
+
+    // 1. Base System Prompt (Manual Override or Default)
     if (config.systemPromptOverride && config.systemPromptOverride.trim().length > 0) {
-        return config.systemPromptOverride;
-    }
-
-    // 2. Personality Prompt (Custom or Default)
-    let rolePrompt = "";
-    if (config.personalityPrompts && config.personalityPrompts[config.aiPersonality]) {
-        rolePrompt = config.personalityPrompts[config.aiPersonality];
+        sysPrompt = config.systemPromptOverride;
     } else {
-        rolePrompt = DEFAULT_PERSONA_PROMPTS[config.aiPersonality] || DEFAULT_PERSONA_PROMPTS['helpful'];
+        sysPrompt = DEFAULT_SYSTEM_PROMPT;
     }
 
-    let sysPrompt = `Роль: ${rolePrompt}\nИмя пользователя: ${userName}\nЯзык ответов: Русский.\n`;
+    sysPrompt += `\n\nИмя пользователя: ${userName}`;
 
-    // 3. Strictness / Accuracy Logic
+    // 2. Strictness / KB Enforcement
     const strictLevel = config.aiStrictness || 80;
-    if (strictLevel >= 100) {
-        sysPrompt += `\n[РЕЖИМ МАКСИМАЛЬНОЙ СТРОГОСТИ]:
-        1. Ты обязан отвечать ТОЛЬКО на основе предоставленной [DATABASE].
-        2. ЗАПРЕЩЕНО использовать свои внутренние знания или придумывать факты, если их нет в базе.
-        3. Если ответа нет в [DATABASE], ты ДОЛЖЕН ответить: "В моих записях нет информации об этом."`;
+    if (strictLevel >= 90) {
+        sysPrompt += `\n\n[ВАЖНО]:
+        1. Отвечай ТОЛЬКО на основе предоставленной базы знаний [DATABASE].
+        2. Если информации нет в базе, отвечай: "Я не знаю ответа на этот вопрос."
+        3. ЗАПРЕЩЕНО выдумывать разделы, команды или факты.`;
     } else {
-        sysPrompt += `\nИспользуй [DATABASE] как основной источник информации. Если там нет ответа, можешь аккуратно дополнить своими знаниями.`;
+        sysPrompt += `\n\nИспользуй [DATABASE] как основной источник.`;
     }
 
-    // 4. Styles (Behavior)
-    if (config.aiBehavior === 'concise') {
-        sysPrompt += "\n[СТИЛЬ]: Отвечай максимально коротко, четко и без воды. 1-2 предложения.";
-    } else if (config.aiBehavior === 'detailed') {
-        sysPrompt += "\n[СТИЛЬ]: Отвечай максимально подробно, развернуто, с деталями.";
-    }
-
-    // 5. Profanity / Toxic Logic
+    // 3. Toxic Mode (Appended if enabled)
     if (config.aiProfanity) {
         const toxicPrompt = config.toxicPrompt || DEFAULT_TOXIC_PROMPT;
         sysPrompt += `\n\n${toxicPrompt}`;
         
         if (config.customProfanityList && config.customProfanityList.length > 0) {
             const words = config.customProfanityList.join('", "');
-            sysPrompt += `\n\n[ОБЯЗАТЕЛЬНО]: Вставь в ответ одну из фраз: "${words}".`;
+            sysPrompt += `\n[ОБЯЗАТЕЛЬНО]: Вставь в ответ одну из фраз: "${words}".`;
         }
     }
     
-    // 6. Media Injection Logic
-    sysPrompt += `\n\n[ИНСТРУКЦИЯ ПО ФОТО]: В базе данных [DATABASE] у каждой записи есть ID (например [ID: abc]). Если ты используешь информацию из записи, у которой есть ID, ты ОБЯЗАН добавить в самый конец ответа тег: [MEDIA_ID: id_записи].`;
+    // 4. Media Injection Instruction (Crucial for Issue #7)
+    sysPrompt += `\n\n[ИНСТРУКЦИЯ ПО ФОТО]:
+    В базе данных [DATABASE] записи могут иметь ID (например [ID: 123]).
+    Если ты используешь информацию из такой записи для ответа,
+    ТЫ ОБЯЗАН добавить в самый конец своего ответа тег: [MEDIA_ID: id_записи].
+    Ничего не пиши после этого тега.`;
 
     return sysPrompt;
 };
@@ -123,7 +114,7 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
     
     activeKey = activeKey.trim();
     
-    // Generate the prompt using the shared logic
+    // Generate the prompt using the single logic
     let sysPrompt = generateSystemPrompt(config, 'Admin');
 
     const messages = [
@@ -134,7 +125,6 @@ export const getAIResponse = async (question: string, config: BotConfig, knowled
     try {
         let response = await performAiRequest(activeKey, config, messages);
         
-        // Handle 429 explicitly
         if (response.status === 429) {
             return "Я устал, подождите пару минут 😴";
         }

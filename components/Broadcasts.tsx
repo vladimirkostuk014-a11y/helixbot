@@ -64,18 +64,14 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
         setProgress({ sent: 0, total: targetUsers.length, failed: 0 });
         if (addLog) addLog('Рассылка', `Старт рассылки (${targetUsers.length} получателей)`, 'warning');
 
-        // Prepare Markup: Object is created here, stringification happens in apiCall for non-formdata, 
-        // or inside apiCall special logic for FormData if needed, but client-side we stringify for FormData usually.
-        // Wait, for FormData in browser, we typically append JSON string.
-        const markupObject = buttons.length > 0 ? { 
+        // Markup Object (passed as object, apiCall handles stringification if needed)
+        const reply_markup = buttons.length > 0 ? { 
             inline_keyboard: buttons.map(b => {
                 let url = b.url;
                 if (url && !url.startsWith('http')) url = `https://${url}`;
                 return [ url ? { text: b.text, url } : { text: b.text, callback_data: 'cb' } ];
             }) 
         } : undefined;
-        
-        const markupString = markupObject ? JSON.stringify(markupObject) : undefined;
         
         const previewUrl = mediaFile ? URL.createObjectURL(mediaFile) : undefined;
         const msgType = mediaFile ? (mediaFile.type.startsWith('video') ? 'video' : 'photo') : 'text';
@@ -89,13 +85,13 @@ const Broadcasts: React.FC<BroadcastsProps> = ({ users, config, addLog, onBroadc
                     const method = mediaFile.type.startsWith('video') ? 'sendVideo' : 'sendPhoto';
                     fd.append(method === 'sendVideo' ? 'video' : 'photo', mediaFile);
                     if (text) fd.append('caption', text);
-                    if (markupString) fd.append('reply_markup', markupString); // Must be string for FormData
+                    if (reply_markup) fd.append('reply_markup', JSON.stringify(reply_markup)); // Client side FormData usually needs string here
                     res = await apiCall(method, fd, config, true);
                 } else {
                     res = await apiCall('sendMessage', { 
                         chat_id: user.id, 
                         text, 
-                        reply_markup: markupObject // Pass object, apiCall handles stringify for JSON body
+                        reply_markup // apiCall handles it
                     }, config);
                 }
 

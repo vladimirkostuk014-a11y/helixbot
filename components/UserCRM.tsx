@@ -114,9 +114,9 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
         if (!msgText.trim() && !mediaFile) return;
 
         try {
-            const markup = buttons.length > 0 ? JSON.stringify({ 
+            const reply_markup = buttons.length > 0 ? { 
                 inline_keyboard: buttons.map(b => [{ text: b.text, url: b.url }]) 
-            }) : '';
+            } : undefined;
             
             let res;
             const previewUrl = mediaFile ? URL.createObjectURL(mediaFile) : undefined;
@@ -129,7 +129,7 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
                 fd.append(method === 'sendVideo' ? 'video' : 'photo', mediaFile, mediaFile.name);
                 
                 if (msgText) fd.append('caption', msgText);
-                if (markup) fd.append('reply_markup', markup);
+                if (reply_markup) fd.append('reply_markup', JSON.stringify(reply_markup));
                 fd.append('parse_mode', 'HTML');
                 
                 res = await apiCall(method, fd, config, true);
@@ -138,7 +138,7 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
                     chat_id: selectedUser.id, 
                     text: msgText,
                     parse_mode: 'HTML',
-                    reply_markup: markup ? JSON.parse(markup) : undefined
+                    reply_markup // apiCall handles it
                 }, config);
             }
 
@@ -301,7 +301,6 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
     };
     
     // Filter history to only show private messages (isGroup: false)
-    // FIX: Using !isGroup to include undefined (legacy messages) or strictly false
     const visibleHistory = (selectedUser?.history || []).filter(msg => !msg.isGroup);
 
     return (

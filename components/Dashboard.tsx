@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { User, AiStats, BotConfig, Group, LogEntry } from '../types';
 import { Icons } from './Icons';
-import { apiCall, getAIResponse, generateSystemPrompt, DEFAULT_PERSONA_PROMPTS, DEFAULT_TOXIC_PROMPT } from '../services/api';
+import { apiCall, getAIResponse, generateSystemPrompt, DEFAULT_SYSTEM_PROMPT, DEFAULT_TOXIC_PROMPT } from '../services/api';
 import { saveData } from '../services/firebase';
 
 const SETTINGS_HASH = "ODk1Mg==";
@@ -46,9 +46,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
     const [isPlaygroundThinking, setIsPlaygroundThinking] = useState(false);
     const playgroundEndRef = useRef<HTMLDivElement>(null);
 
-    // Calculated Prompt State
-    const [currentSystemPrompt, setCurrentSystemPrompt] = useState('');
-
     const userArray: User[] = Object.values(users);
     const realUsers = userArray.filter(u => u.id > 0 && u.id !== 777000 && u.id !== 1087968824);
     const activeUsers = realUsers.filter(u => u.dailyMsgCount > 0).sort((a, b) => b.dailyMsgCount - a.dailyMsgCount);
@@ -58,12 +55,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
             playgroundEndRef.current.scrollIntoView({ behavior: 'smooth' });
         }
     }, [playgroundHistory, showPlayground, isPlaygroundThinking]);
-
-    // Update calculated prompt when settings change
-    useEffect(() => {
-        const prompt = generateSystemPrompt(config, 'User');
-        setCurrentSystemPrompt(prompt);
-    }, [config.aiPersonality, config.aiStrictness, config.aiProfanity, config.aiBehavior, config.customProfanityList, config.systemPromptOverride, config.personalityPrompts, config.toxicPrompt]);
 
     const handleSettingsLogin = (e: React.FormEvent) => {
         e.preventDefault();
@@ -85,7 +76,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
 
     const getTopQuestions = () => {
         const counts: Record<string, number> = {};
-        (aiStats.history || []).filter(h => !h.cleared).forEach(h => {
+        ((aiStats as any).history || []).filter((h: any) => !h.cleared).forEach((h: any) => {
             const q = h.query.toLowerCase().trim();
             if (q) counts[q] = (counts[q] || 0) + 1;
         });
@@ -183,8 +174,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                 });
             }
             let aiCount = 0;
-            if (aiStats && aiStats.history) {
-                aiStats.history.forEach(stat => {
+            if (aiStats && (aiStats as any).history) {
+                (aiStats as any).history.forEach((stat: any) => {
                     const statDate = new Date(stat.time);
                     statDate.setHours(0,0,0,0);
                      if (statDate.getTime() === d.getTime()) aiCount++;
@@ -274,54 +265,29 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                     <option value="llama-3.3-70b-versatile">🧠 Llama 3.3 70B (Основная)</option>
                                     <option value="llama-3.1-8b-instant">⚡ Llama 3.1 8B (Быстрая)</option>
                                 </select>
-                                <div className="mt-4">
-                                    <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Ответ</label>
-                                    <select value={config.aiBehavior || 'balanced'} onChange={e => setConfig({...config, aiBehavior: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
-                                        <option value="balanced">⚖️ Обычный</option>
-                                        <option value="concise">⚡ Короткий</option>
-                                        <option value="detailed">📜 Подробный</option>
-                                    </select>
-                                </div>
                             </div>
                         </div>
 
-                        {/* 2. PERSONALITY SETTINGS */}
-                        <div className="bg-blue-900/10 p-4 rounded-xl border border-blue-900/30">
-                            <div className="mb-4">
-                                <label className="text-xs text-blue-400 font-bold uppercase mb-1 block">Личность Бота</label>
-                                <select value={config.aiPersonality || 'helpful'} onChange={e => setConfig({...config, aiPersonality: e.target.value})} className="w-full bg-black border border-blue-800 rounded-lg p-2.5 text-white text-sm focus:border-blue-500 outline-none transition-colors">
-                                    <option value="helpful">😄 Хеликс (Полезный)</option>
-                                    <option value="kind">💖 Добряк</option>
-                                    <option value="official">🧐 Официальный</option>
-                                    <option value="joker">🤡 Шутник</option>
-                                    <option value="angry">😡 Злой</option>
-                                    <option value="gopnik">🍺 Гопник</option>
-                                </select>
-                            </div>
-
-                            {/* GRANULAR PERSONALITY PROMPT */}
-                            <div>
-                                <div className="flex justify-between items-center mb-1">
-                                    <label className="text-xs text-gray-400 font-bold uppercase block">Промт Личности (Инструкция)</label>
-                                    {config.personalityPrompts && config.personalityPrompts[config.aiPersonality] && (
-                                        <button onClick={() => {
-                                            const newPrompts = { ...config.personalityPrompts };
-                                            delete newPrompts[config.aiPersonality];
-                                            setConfig({ ...config, personalityPrompts: newPrompts });
-                                        }} className="text-[10px] text-red-400 hover:underline">Сбросить до стандартного</button>
-                                    )}
-                                </div>
-                                <textarea 
-                                    value={config.personalityPrompts?.[config.aiPersonality] || DEFAULT_PERSONA_PROMPTS[config.aiPersonality] || DEFAULT_PERSONA_PROMPTS['helpful']}
-                                    onChange={e => {
-                                        const newPrompts = { ...(config.personalityPrompts || {}), [config.aiPersonality]: e.target.value };
-                                        setConfig({ ...config, personalityPrompts: newPrompts });
-                                    }}
-                                    className="w-full bg-black border border-gray-700 rounded-lg p-3 text-white text-xs font-mono h-24 focus:border-blue-500 outline-none leading-relaxed"
-                                    placeholder="Опишите, как должен вести себя бот в этом режиме..."
-                                />
-                                <p className="text-[10px] text-gray-500 mt-1">Этот текст заменяет стандартное описание для выбранной личности.</p>
-                            </div>
+                        {/* 2. SINGLE SYSTEM PROMPT (Replaced Personalities) */}
+                        <div className="bg-gray-900/30 p-4 rounded-xl border border-gray-800">
+                             <div className="flex justify-between items-center mb-2">
+                                 <label className="text-xs text-gray-500 font-bold uppercase flex items-center gap-2">
+                                    <Icons.FileText size={14}/> Системный Промт (Инструкция)
+                                 </label>
+                                 <button 
+                                    onClick={() => setConfig({...config, systemPromptOverride: DEFAULT_SYSTEM_PROMPT})} 
+                                    className="text-[10px] bg-blue-900/50 text-blue-200 px-2 py-0.5 rounded border border-blue-800 hover:bg-blue-900"
+                                 >
+                                    Вставить шаблон
+                                 </button>
+                             </div>
+                             <p className="text-[10px] text-gray-600 mb-2">Здесь вы полностью описываете, кто такой бот, как он должен отвечать и какие правила соблюдать.</p>
+                             <textarea 
+                                value={config.systemPromptOverride || ''}
+                                onChange={e => setConfig({...config, systemPromptOverride: e.target.value})}
+                                className="w-full bg-black border border-gray-800 rounded-lg p-3 text-white text-xs font-mono h-40 focus:border-purple-500 outline-none leading-relaxed"
+                                placeholder="Ты — Хеликс, полезный помощник..."
+                             />
                         </div>
                         
                         {/* 3. STRICTNESS */}
@@ -331,7 +297,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                 <span className={`text-xs font-bold ${config.aiStrictness >= 90 ? 'text-green-500' : 'text-yellow-500'}`}>{config.aiStrictness || 80}%</span>
                             </div>
                             <input type="range" min="0" max="100" step="10" value={config.aiStrictness || 80} onChange={e => setConfig({...config, aiStrictness: parseInt(e.target.value)})} className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"/>
-                            {config.aiStrictness >= 100 && <p className="text-[10px] text-green-400 mt-1">✅ Режим максимальной строгости: Бот отвечает ТОЛЬКО по базе.</p>}
+                            {config.aiStrictness >= 90 && <p className="text-[10px] text-green-400 mt-1">✅ Режим максимальной строгости: Бот не будет выдумывать факты, которых нет в базе.</p>}
                         </div>
 
                         {/* 4. TOXICITY SETTINGS */}
@@ -343,7 +309,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
 
                             {config.aiProfanity && (
                                 <div className="space-y-4 animate-slideIn">
-                                    {/* GRANULAR TOXIC PROMPT */}
                                     <div>
                                         <div className="flex justify-between items-center mb-1">
                                             <label className="text-xs text-red-400 font-bold uppercase block">Промт Токсичности</label>
@@ -351,6 +316,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                                 <button onClick={() => setConfig({ ...config, toxicPrompt: undefined })} className="text-[10px] text-gray-400 hover:text-white underline">Сбросить</button>
                                             )}
                                         </div>
+                                        <p className="text-[10px] text-gray-500 mb-1">Этот текст добавляется к основному промту, когда включен режим мата.</p>
                                         <textarea 
                                             value={config.toxicPrompt || DEFAULT_TOXIC_PROMPT}
                                             onChange={e => setConfig({ ...config, toxicPrompt: e.target.value })}
@@ -384,30 +350,6 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                             )}
                         </div>
                         
-                        {/* 5. GLOBAL OVERRIDE (Hidden/Advanced or Just Collapsed? Keeping it visible but less prominent) */}
-                        <div className="bg-gray-900/30 p-4 rounded-xl border border-gray-800">
-                             <div className="flex justify-between items-center mb-2">
-                                 <label className="text-xs text-gray-500 font-bold uppercase flex items-center gap-2">
-                                    <Icons.FileText size={14}/> Системный Промт (Глобальный Override)
-                                 </label>
-                                 {(config.systemPromptOverride && config.systemPromptOverride.length > 0) && (
-                                     <span className="text-[10px] bg-red-900/50 text-red-200 px-2 py-0.5 rounded border border-red-800">АКТИВЕН</span>
-                                 )}
-                             </div>
-                             <p className="text-[10px] text-gray-600 mb-2">Если здесь есть текст, он полностью заменит все настройки выше (личность, мат, базу данных). Оставьте пустым для авто-режима.</p>
-                             <textarea 
-                                value={config.systemPromptOverride || ''}
-                                onChange={e => setConfig({...config, systemPromptOverride: e.target.value})}
-                                className={`w-full bg-black border rounded-lg p-3 text-white text-xs font-mono h-20 focus:border-purple-500 outline-none leading-relaxed ${config.systemPromptOverride ? 'border-purple-500' : 'border-gray-800 opacity-60'}`}
-                                placeholder="Ручной режим (для экспертов)..."
-                             />
-                             {config.systemPromptOverride && (
-                                 <div className="flex justify-end mt-2">
-                                     <button onClick={() => setConfig({...config, systemPromptOverride: ''})} className="text-xs text-red-400 hover:text-white underline">Сбросить до автоматического</button>
-                                 </div>
-                             )}
-                        </div>
-
                          <div className="flex gap-2 pt-4">
                             <button onClick={() => setShowPlayground(true)} className="flex-1 bg-gray-800 text-purple-300 border border-purple-900/30 py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-gray-700 transition-colors">
                                 <Icons.Terminal size={18}/> Тест AI
@@ -542,8 +484,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                 </div>
             </div>
-
-            {/* Existing Modals code... (Active, Groups, AI Stats) same as before */}
+            
             {showActiveModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowActiveModal(false)}>
                     <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl p-6 animate-slideIn" onClick={e => e.stopPropagation()}>
@@ -606,7 +547,7 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
 
                         {aiModalTab === 'history' && (
                             <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar">
-                                {(aiStats.history || []).filter(h => !h.cleared).slice(0, 100).map((h, i) => (
+                                {((aiStats as any).history || []).filter((h: any) => !h.cleared).slice(0, 100).map((h: any, i: number) => (
                                     <div key={i} className="bg-gray-900 p-4 rounded-lg border border-gray-800">
                                         <div className="flex justify-between text-xs text-gray-500 mb-2"><span>#{i+1}</span><span>{new Date(h.time).toLocaleString('ru-RU')}</span></div>
                                         <div className="text-white text-sm font-bold mb-1">Q: {h.query}</div>
