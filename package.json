@@ -6,6 +6,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "lint": "tsc --noEmit",
     "start": "node bot-server.js"
   },
   "dependencies": {

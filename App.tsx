@@ -61,6 +61,7 @@ const App = () => {
         aiTemperature: 0.3,
         aiMaxTokens: 1000,
         aiStrictness: 80, 
+        aiResponseStyle: 'auto',
         bannedWords: '' 
     });
     

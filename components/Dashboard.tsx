@@ -266,6 +266,47 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                     <option value="llama-3.1-8b-instant">⚡ Llama 3.1 8B (Быстрая)</option>
                                 </select>
                             </div>
+                            <div>
+                                <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Стиль ответов</label>
+                                <select value={config.aiResponseStyle || 'auto'} onChange={e => setConfig({...config, aiResponseStyle: e.target.value as any})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
+                                    <option value="auto">🤖 Автоматически</option>
+                                    <option value="brief">📝 Кратко</option>
+                                    <option value="detailed">📚 Подробно</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Личность Хеликса</label>
+                                <select value={config.aiPersonality || 'helpful'} onChange={e => setConfig({...config, aiPersonality: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
+                                    <option value="helpful">🤝 Помощник (Стандарт)</option>
+                                    <option value="teacher">👨‍🏫 Учитель (Объясняет)</option>
+                                    <option value="sarcastic">😏 Саркастичный (Шутит)</option>
+                                    <option value="tech">💻 Технарь (Коротко и ясно)</option>
+                                </select>
+                            </div>
+                            <div className="md:col-span-2 bg-gray-900/30 p-4 rounded-xl border border-gray-800">
+                                <div className="flex justify-between items-center mb-2">
+                                    <label className="text-xs text-gray-400 font-bold uppercase flex items-center gap-2">
+                                        <Icons.Target size={14}/> Строгость / Точность (KB Strictness)
+                                    </label>
+                                    <span className={`text-xs font-bold ${config.aiStrictness === 100 ? 'text-red-500' : 'text-blue-400'}`}>
+                                        {config.aiStrictness}% {config.aiStrictness === 100 ? '(ТОЛЬКО БАЗА)' : ''}
+                                    </span>
+                                </div>
+                                <input 
+                                    type="range" 
+                                    min="0" 
+                                    max="100" 
+                                    step="1"
+                                    value={config.aiStrictness || 80}
+                                    onChange={e => setConfig({...config, aiStrictness: parseInt(e.target.value)})}
+                                    className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                                />
+                                <div className="flex justify-between text-[10px] text-gray-600 mt-1">
+                                    <span>Свободное общение</span>
+                                    <span>Баланс</span>
+                                    <span>Только База Знаний</span>
+                                </div>
+                            </div>
                         </div>
 
                         {/* 2. SINGLE SYSTEM PROMPT (Replaced Personalities) */}
@@ -309,24 +350,9 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
 
                             {config.aiProfanity && (
                                 <div className="space-y-4 animate-slideIn">
-                                    <div>
-                                        <div className="flex justify-between items-center mb-1">
-                                            <label className="text-xs text-red-400 font-bold uppercase block">Промт Токсичности</label>
-                                            {config.toxicPrompt && (
-                                                <button onClick={() => setConfig({ ...config, toxicPrompt: undefined })} className="text-[10px] text-gray-400 hover:text-white underline">Сбросить</button>
-                                            )}
-                                        </div>
-                                        <p className="text-[10px] text-gray-500 mb-1">Этот текст добавляется к основному промту, когда включен режим мата.</p>
-                                        <textarea 
-                                            value={config.toxicPrompt || DEFAULT_TOXIC_PROMPT}
-                                            onChange={e => setConfig({ ...config, toxicPrompt: e.target.value })}
-                                            className="w-full bg-black border border-red-900/50 rounded-lg p-3 text-red-100 text-xs font-mono h-24 focus:border-red-500 outline-none leading-relaxed"
-                                        />
-                                    </div>
-
                                     {/* Custom Profanity List */}
                                     <div>
-                                        <label className="text-xs text-red-400 font-bold uppercase mb-2 block">Словарь токсика (Обязательное использование)</label>
+                                        <label className="text-xs text-red-400 font-bold uppercase mb-2 block">Словарь для шуток (Опционально)</label>
                                         <div className="flex gap-2 mb-2">
                                             <input 
                                                 value={newProfanityWord} 

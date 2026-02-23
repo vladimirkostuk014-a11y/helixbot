@@ -23,6 +23,7 @@ export interface BotConfig {
     systemPromptOverride?: string; // Global manual override
     personalityPrompts?: Record<string, string>; // NEW: Custom prompts per personality
     toxicPrompt?: string; // NEW: Custom prompt for toxic mode
+    aiResponseStyle?: 'brief' | 'detailed' | 'auto'; // NEW: Response style
     bannedWords: string;
 }
 

@@ -381,10 +381,19 @@ const UserCRM: React.FC<UserCRMProps> = ({ users, setUsers, config, topicNames =
                                 <div className="text-xs text-gray-400">Был: {selectedUser.lastSeen}</div>
                             </div>
                         </div>
-                        <div className="flex gap-2 items-center">
-                            <button onClick={handleDeleteUser} className="text-gray-500 hover:text-red-500 p-2 rounded-lg transition-colors flex items-center gap-2 text-xs font-bold bg-gray-900/50 hover:bg-gray-900 border border-gray-800" title="Удалить из базы">
-                                <Icons.Trash2 size={16}/> Удалить
-                            </button>
+                            <div className="flex gap-2 items-center">
+                                <button onClick={async () => {
+                                    if (window.confirm(`Очистить историю сообщений только для себя (в панели)?\nЭто не удалит сообщения у пользователя в Telegram.`)) {
+                                        setUsers(prev => ({ ...prev, [selectedUser.id]: { ...selectedUser, history: [] } }));
+                                        await saveData(`users/${selectedUser.id}/history`, []);
+                                        if (addLog) addLog('CRM', `История сообщений пользователя ${selectedUser.name} очищена в панели`, 'warning');
+                                    }
+                                }} className="text-gray-500 hover:text-yellow-500 p-2 rounded-lg transition-colors flex items-center gap-2 text-xs font-bold bg-gray-900/50 hover:bg-gray-900 border border-gray-800" title="Очистить историю только в панели">
+                                    <Icons.Trash2 size={16}/> Очистить историю
+                                </button>
+                                <button onClick={handleDeleteUser} className="text-gray-500 hover:text-red-500 p-2 rounded-lg transition-colors flex items-center gap-2 text-xs font-bold bg-gray-900/50 hover:bg-gray-900 border border-gray-800" title="Удалить из базы">
+                                    <Icons.Trash2 size={16}/> Удалить
+                                </button>
                             <div className="w-[1px] bg-gray-700 h-6 my-auto mx-1"></div>
                             
                             {/* Ban/Mute/Kick Controls */}
