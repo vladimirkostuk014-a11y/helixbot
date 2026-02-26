@@ -60,7 +60,6 @@ const App = () => {
         customProfanityList: [],
         aiTemperature: 0.3,
         aiMaxTokens: 1000,
-        aiStrictness: 80, 
         aiResponseStyle: 'auto',
         bannedWords: '' 
     });
@@ -448,7 +447,7 @@ const App = () => {
             <div className="flex-1 flex flex-col min-w-0 bg-[#0f0f12] relative overflow-hidden pt-16 md:pt-0">
                 <div className="flex-1 overflow-auto p-4 md:p-8 scroll-smooth custom-scrollbar">
                     <div className="max-w-[100%] md:max-w-[95%] mx-auto h-full">
-                        {activeTab === 'dashboard' && <Dashboard users={users} groups={groups} setGroups={setGroups} aiStats={aiStats} config={config} setConfig={setConfig} isAiThinking={false} setAiStats={setAiStats} addLog={addLog} setActiveTab={setActiveTab} onStopBot={() => setIsBotActive(false)} onClearAiStats={clearAiHistory} viewMode="overview" auditLogs={auditLogs} onDeleteGroup={handleDeleteGroup} />}
+                        {activeTab === 'dashboard' && <Dashboard users={users} groups={groups} setGroups={setGroups} aiStats={aiStats} config={config} setConfig={setConfig} isAiThinking={false} setAiStats={setAiStats} addLog={addLog} setActiveTab={setActiveTab} onStopBot={() => setIsBotActive(false)} onClearAiStats={clearAiHistory} viewMode="overview" auditLogs={auditLogs} onDeleteGroup={handleDeleteGroup} knowledgeBase={knowledgeBase} />}
                         {activeTab === 'livechat' && <LiveChat 
                             topicNames={topicNames} 
                             topicHistory={topicHistory} 
@@ -484,7 +483,7 @@ const App = () => {
                         {activeTab === 'commands' && <Commands commands={commands} setCommands={(c) => { setCommands(c); saveData('commands', c); }} topicNames={topicNames} />}
                         {activeTab === 'knowledge' && <KnowledgeBase items={knowledgeBase} categories={categories} setItems={(i) => { setKnowledgeBase(i); saveData('knowledgeBase', i); }} setCategories={(c) => { setCategories(c); saveData('categories', c); }} addLog={addLog} />}
                         {activeTab === 'logs' && <AuditLogs logs={auditLogs} setLogs={(l) => { setAuditLogs(l); saveData('auditLogs', l); }} />}
-                        {activeTab === 'settings' && <Dashboard users={users} groups={groups} setGroups={setGroups} aiStats={aiStats} config={config} setConfig={setConfig} isAiThinking={false} setAiStats={setAiStats} addLog={addLog} setActiveTab={setActiveTab} onStopBot={() => setIsBotActive(false)} onClearAiStats={clearAiHistory} viewMode="settings" />}
+                        {activeTab === 'settings' && <Dashboard users={users} groups={groups} setGroups={setGroups} aiStats={aiStats} config={config} setConfig={setConfig} isAiThinking={false} setAiStats={setAiStats} addLog={addLog} setActiveTab={setActiveTab} onStopBot={() => setIsBotActive(false)} onClearAiStats={clearAiHistory} viewMode="settings" knowledgeBase={knowledgeBase} />}
                     </div>
                 </div>
             </div>

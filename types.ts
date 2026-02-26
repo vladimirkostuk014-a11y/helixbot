@@ -19,8 +19,6 @@ export interface BotConfig {
     customProfanityList?: string[]; // List of specific phrases/jokes
     aiTemperature: number;
     aiMaxTokens: number;
-    aiStrictness: number; // 0 to 100 (Accuracy)
-    systemPromptOverride?: string; // Global manual override
     personalityPrompts?: Record<string, string>; // NEW: Custom prompts per personality
     toxicPrompt?: string; // NEW: Custom prompt for toxic mode
     aiResponseStyle?: 'brief' | 'detailed' | 'auto'; // NEW: Response style

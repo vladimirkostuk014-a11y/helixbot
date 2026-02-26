@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { User, AiStats, BotConfig, Group, LogEntry } from '../types';
+import { User, AiStats, BotConfig, Group, LogEntry, KnowledgeItem } from '../types';
 import { Icons } from './Icons';
 import { apiCall, getAIResponse, generateSystemPrompt, DEFAULT_SYSTEM_PROMPT, DEFAULT_TOXIC_PROMPT } from '../services/api';
 import { saveData } from '../services/firebase';
@@ -24,9 +24,10 @@ interface DashboardProps {
     viewMode?: 'overview' | 'settings';
     auditLogs?: LogEntry[];
     onDeleteGroup?: (groupId: string) => void;
+    knowledgeBase?: KnowledgeItem[];
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, aiStats, config, setConfig, isAiThinking, setAiStats, addLog, setActiveTab, onStopBot, onClearAiStats, viewMode = 'overview', auditLogs = [], onDeleteGroup }) => {
+const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, aiStats, config, setConfig, isAiThinking, setAiStats, addLog, setActiveTab, onStopBot, onClearAiStats, viewMode = 'overview', auditLogs = [], onDeleteGroup, knowledgeBase = [] }) => {
     const [aiSaveStatus, setAiSaveStatus] = useState('');
     const [showGroupModal, setShowGroupModal] = useState(false);
     const [showActiveModal, setShowActiveModal] = useState(false);
@@ -122,7 +123,11 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
         setPlaygroundHistory(prev => [...prev, { role: 'user', text: msg }]);
         setIsPlaygroundThinking(true);
         try {
-            const response = await getAIResponse(msg, config, "База знаний: (Песочница)");
+            const kbContext = knowledgeBase.length > 0 
+                ? knowledgeBase.map(k => `ЗАПИСЬ [ID: ${k.id}]:\n- Раздел: ${k.category || 'Общее'}\n- Заголовок: ${k.title || 'Нет'}\n- Ключевые слова: ${k.triggers || 'Нет'}\n- Информация: ${k.response}`).join('\n\n---\n\n')
+                : "База знаний пуста.";
+
+            const response = await getAIResponse(msg, config, kbContext);
             setPlaygroundHistory(prev => [...prev, { role: 'bot', text: response }]);
         } catch (e) {
             setPlaygroundHistory(prev => [...prev, { role: 'bot', text: "Error: " + e }]);
@@ -245,8 +250,9 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                     </div>
                     
                     <div className="space-y-6 relative z-10 flex-1 overflow-y-auto custom-scrollbar pr-2 pb-20">
-                        {/* 1. KEY & MODEL */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* 1. MAIN SETTINGS GRID */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {/* API Key */}
                             <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
                                  <label className="text-xs text-gray-400 font-bold uppercase mb-2 block flex items-center gap-2">
                                     <Icons.Settings size={14}/> API Key (Groq/OpenAI)
@@ -256,131 +262,71 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                                     onChange={e => setConfig({...config, openaiApiKey: e.target.value})}
                                     type="password"
                                     placeholder="gsk_..."
-                                    className="w-full bg-black border border-gray-600 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none"
+                                    className="w-full bg-black border border-gray-600 rounded-lg p-3 text-white text-sm focus:border-purple-500 outline-none transition-colors"
                                  />
+                                 <p className="text-[10px] text-gray-500 mt-2">Ключ для доступа к LLM модели.</p>
                             </div>
-                            <div>
-                                <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Модель AI</label>
-                                <select value={config.aiModel || 'llama-3.3-70b-versatile'} onChange={e => setConfig({...config, aiModel: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
+
+                            {/* Model Selection */}
+                            <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
+                                <label className="text-xs text-gray-400 font-bold uppercase mb-2 block flex items-center gap-2">
+                                    <Icons.Cpu size={14}/> Модель AI
+                                </label>
+                                <select value={config.aiModel || 'llama-3.3-70b-versatile'} onChange={e => setConfig({...config, aiModel: e.target.value})} className="w-full bg-black border border-gray-600 rounded-lg p-3 text-white text-sm focus:border-purple-500 outline-none transition-colors">
                                     <option value="llama-3.3-70b-versatile">🧠 Llama 3.3 70B (Основная)</option>
                                     <option value="llama-3.1-8b-instant">⚡ Llama 3.1 8B (Быстрая)</option>
+                                    <option value="mixtral-8x7b-32768">🌪 Mixtral 8x7B</option>
+                                    <option value="gemma-7b-it">💎 Gemma 7B</option>
                                 </select>
+                                <p className="text-[10px] text-gray-500 mt-2">Выберите "мозги" для Хеликса.</p>
                             </div>
+
+                            {/* Personality */}
+                            <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
+                                <label className="text-xs text-gray-400 font-bold uppercase mb-2 block flex items-center gap-2">
+                                    <Icons.User size={14}/> Личность Хеликса
+                                </label>
+                                <select value={config.aiPersonality || 'helpful'} onChange={e => setConfig({...config, aiPersonality: e.target.value})} className="w-full bg-black border border-gray-600 rounded-lg p-3 text-white text-sm focus:border-purple-500 outline-none transition-colors">
+                                    <option value="helpful">🤝 Помощник (Дружелюбный)</option>
+                                    <option value="teacher">👨‍🏫 Учитель (Подробный)</option>
+                                    <option value="sarcastic">😏 Саркастичный (С юмором)</option>
+                                    <option value="tech">💻 Технарь (Сухие факты)</option>
+                                </select>
+                                <p className="text-[10px] text-gray-500 mt-2">Влияет на тон общения (но не на факты).</p>
+                            </div>
+
+                            {/* Response Style */}
+                            <div className="bg-gray-900/50 p-4 rounded-xl border border-gray-700">
+                                <label className="text-xs text-gray-400 font-bold uppercase mb-2 block flex items-center gap-2">
+                                    <Icons.MessageSquare size={14}/> Стиль ответов
+                                </label>
+                                <select value={config.aiResponseStyle || 'auto'} onChange={e => setConfig({...config, aiResponseStyle: e.target.value as any})} className="w-full bg-black border border-gray-600 rounded-lg p-3 text-white text-sm focus:border-purple-500 outline-none transition-colors">
+                                    <option value="auto">🤖 Автоматически (Адаптивный)</option>
+                                    <option value="brief">📝 Кратко (Только суть)</option>
+                                    <option value="detailed">📚 Подробно (С деталями)</option>
+                                </select>
+                                <p className="text-[10px] text-gray-500 mt-2">Регулирует длину сообщений.</p>
+                            </div>
+                        </div>
+
+                        {/* Info Block */}
+                        <div className="bg-blue-900/20 border border-blue-900/50 p-4 rounded-xl flex gap-3 items-start">
+                            <Icons.Info className="text-blue-400 shrink-0 mt-1" size={18}/>
                             <div>
-                                <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Стиль ответов</label>
-                                <select value={config.aiResponseStyle || 'auto'} onChange={e => setConfig({...config, aiResponseStyle: e.target.value as any})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
-                                    <option value="auto">🤖 Автоматически</option>
-                                    <option value="brief">📝 Кратко</option>
-                                    <option value="detailed">📚 Подробно</option>
-                                </select>
+                                <h4 className="text-blue-300 font-bold text-sm mb-1">Как это работает?</h4>
+                                <p className="text-xs text-blue-200/70 leading-relaxed">
+                                    Хеликс теперь работает в гибридном режиме. Если вы просто общаетесь ("Привет", "Как дела"), он будет поддерживать беседу согласно выбранной личности. 
+                                    <br/><br/>
+                                    Однако, если вы задаете вопрос, он <b>автоматически</b> ищет ответ в Базе Знаний. Если информации там нет, он честно об этом скажет. Вам больше не нужно настраивать "Строгость" — он сам понимает, когда нужно быть строгим.
+                                </p>
                             </div>
-                            <div>
-                                <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Личность Хеликса</label>
-                                <select value={config.aiPersonality || 'helpful'} onChange={e => setConfig({...config, aiPersonality: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm focus:border-purple-500 outline-none transition-colors">
-                                    <option value="helpful">🤝 Помощник (Стандарт)</option>
-                                    <option value="teacher">👨‍🏫 Учитель (Объясняет)</option>
-                                    <option value="sarcastic">😏 Саркастичный (Шутит)</option>
-                                    <option value="tech">💻 Технарь (Коротко и ясно)</option>
-                                </select>
-                            </div>
-                            <div className="md:col-span-2 bg-gray-900/30 p-4 rounded-xl border border-gray-800">
-                                <div className="flex justify-between items-center mb-2">
-                                    <label className="text-xs text-gray-400 font-bold uppercase flex items-center gap-2">
-                                        <Icons.Target size={14}/> Строгость / Точность (KB Strictness)
-                                    </label>
-                                    <span className={`text-xs font-bold ${config.aiStrictness === 100 ? 'text-red-500' : 'text-blue-400'}`}>
-                                        {config.aiStrictness}% {config.aiStrictness === 100 ? '(ТОЛЬКО БАЗА)' : ''}
-                                    </span>
-                                </div>
-                                <input 
-                                    type="range" 
-                                    min="0" 
-                                    max="100" 
-                                    step="1"
-                                    value={config.aiStrictness || 80}
-                                    onChange={e => setConfig({...config, aiStrictness: parseInt(e.target.value)})}
-                                    className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                                />
-                                <div className="flex justify-between text-[10px] text-gray-600 mt-1">
-                                    <span>Свободное общение</span>
-                                    <span>Баланс</span>
-                                    <span>Только База Знаний</span>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* 2. SINGLE SYSTEM PROMPT (Replaced Personalities) */}
-                        <div className="bg-gray-900/30 p-4 rounded-xl border border-gray-800">
-                             <div className="flex justify-between items-center mb-2">
-                                 <label className="text-xs text-gray-500 font-bold uppercase flex items-center gap-2">
-                                    <Icons.FileText size={14}/> Системный Промт (Инструкция)
-                                 </label>
-                                 <button 
-                                    onClick={() => setConfig({...config, systemPromptOverride: DEFAULT_SYSTEM_PROMPT})} 
-                                    className="text-[10px] bg-blue-900/50 text-blue-200 px-2 py-0.5 rounded border border-blue-800 hover:bg-blue-900"
-                                 >
-                                    Вставить шаблон
-                                 </button>
-                             </div>
-                             <p className="text-[10px] text-gray-600 mb-2">Здесь вы полностью описываете, кто такой бот, как он должен отвечать и какие правила соблюдать.</p>
-                             <textarea 
-                                value={config.systemPromptOverride || ''}
-                                onChange={e => setConfig({...config, systemPromptOverride: e.target.value})}
-                                className="w-full bg-black border border-gray-800 rounded-lg p-3 text-white text-xs font-mono h-40 focus:border-purple-500 outline-none leading-relaxed"
-                                placeholder="Ты — Хеликс, полезный помощник..."
-                             />
-                        </div>
-                        
-                        {/* 3. STRICTNESS */}
-                        <div>
-                            <div className="flex justify-between mb-1">
-                                <label className="text-xs text-gray-400 font-bold uppercase block">Строгость / Точность (100% = Только База Знаний)</label>
-                                <span className={`text-xs font-bold ${config.aiStrictness >= 90 ? 'text-green-500' : 'text-yellow-500'}`}>{config.aiStrictness || 80}%</span>
-                            </div>
-                            <input type="range" min="0" max="100" step="10" value={config.aiStrictness || 80} onChange={e => setConfig({...config, aiStrictness: parseInt(e.target.value)})} className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"/>
-                            {config.aiStrictness >= 90 && <p className="text-[10px] text-green-400 mt-1">✅ Режим максимальной строгости: Бот не будет выдумывать факты, которых нет в базе.</p>}
-                        </div>
-
-                        {/* 4. TOXICITY SETTINGS */}
-                        <div className={`p-4 rounded-xl border transition-colors ${config.aiProfanity ? 'bg-red-900/10 border-red-900/30' : 'bg-gray-900/50 border-gray-700'}`}>
-                            <label className="flex items-center gap-3 cursor-pointer mb-4">
-                                <input type="checkbox" checked={config.aiProfanity || false} onChange={e => setConfig({...config, aiProfanity: e.target.checked})} className="accent-red-500 w-5 h-5"/>
-                                <span className="text-sm text-red-300 font-bold">🤬 Токсичность (Мат)</span>
-                            </label>
-
-                            {config.aiProfanity && (
-                                <div className="space-y-4 animate-slideIn">
-                                    {/* Custom Profanity List */}
-                                    <div>
-                                        <label className="text-xs text-red-400 font-bold uppercase mb-2 block">Словарь для шуток (Опционально)</label>
-                                        <div className="flex gap-2 mb-2">
-                                            <input 
-                                                value={newProfanityWord} 
-                                                onChange={e => setNewProfanityWord(e.target.value)} 
-                                                onKeyDown={e => e.key === 'Enter' && handleAddProfanity()}
-                                                placeholder="Напр: возьми микрозайм" 
-                                                className="flex-1 bg-black border border-gray-700 rounded px-3 py-1 text-sm text-white"
-                                            />
-                                            <button onClick={handleAddProfanity} className="bg-red-900/50 text-red-200 px-3 py-1 rounded border border-red-800 text-xs font-bold">Добавить</button>
-                                        </div>
-                                        <div className="flex flex-wrap gap-2">
-                                            {(config.customProfanityList || []).map((word, i) => (
-                                                <span key={i} className="bg-red-900/20 text-red-300 px-2 py-1 rounded text-xs border border-red-900/40 flex items-center gap-2">
-                                                    {word}
-                                                    <button onClick={() => handleRemoveProfanity(word)} className="hover:text-white"><Icons.X size={10}/></button>
-                                                </span>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
                         </div>
                         
                          <div className="flex gap-2 pt-4">
                             <button onClick={() => setShowPlayground(true)} className="flex-1 bg-gray-800 text-purple-300 border border-purple-900/30 py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-gray-700 transition-colors">
                                 <Icons.Terminal size={18}/> Тест AI
                             </button>
-                            <button onClick={() => handleSave('ai')} className="flex-[2] bg-purple-600 hover:bg-purple-500 text-white py-3 rounded-xl font-bold shadow-lg shadow-purple-900/20 transition-all">
+                            <button onClick={() => handleSave('ai')} className="flex-[2] bg-purple-600 hover:bg-purple-500 text-white py-3 rounded-xl font-bold shadow-lg shadow-purple-900/20 transition-all hover:scale-[1.02] active:scale-95">
                                 {aiSaveStatus || 'Сохранить настройки'}
                             </button>
                         </div>
@@ -392,7 +338,10 @@ const Dashboard: React.FC<DashboardProps> = ({ users, groups = {}, setGroups, ai
                         <div className="bg-[#121214] border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl animate-slideIn flex flex-col h-[600px]" onClick={e => e.stopPropagation()}>
                             <div className="flex justify-between items-center p-4 border-b border-gray-800">
                                 <h3 className="text-lg font-bold text-white flex items-center gap-2"><Icons.Terminal size={20} className="text-purple-500"/> Тест Личности (Sandbox)</h3>
-                                <button onClick={() => setShowPlayground(false)}><Icons.X size={20} className="text-gray-500 hover:text-white"/></button>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setPlaygroundHistory([])} className="text-xs text-gray-500 hover:text-white px-2 py-1 rounded hover:bg-gray-800 transition-colors">Очистить</button>
+                                    <button onClick={() => setShowPlayground(false)}><Icons.X size={20} className="text-gray-500 hover:text-white"/></button>
+                                </div>
                             </div>
                             <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar bg-black/20">
                                 {playgroundHistory.map((msg, i) => (
